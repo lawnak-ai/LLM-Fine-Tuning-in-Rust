@@ -120,7 +120,7 @@ Measured on a 4-core cloud VM (Xeon, AVX-512) with a Qwen2.5-0.5B-sized model, 2
 | q8_0 / q4_0 (QLoRA) | ~20 tokens/s | 1.9 GB |
 
 A desktop with more cores is proportionally faster, and a GPU much faster. Rough guide: 1,000 Q&A pairs of ~100 tokens is ~100k tokens per epoch, about an hour per epoch for a 0.5B model on 4 CPU cores.
-The build uses `-C target-cpu=native` (see `.cargo/config.toml`), so the binary is tuned for the computer that compiled it. Add `--features mkl` (Intel) or `--features accelerate` (macOS) for faster CPU math.
+The build uses `-C target-cpu=native` (see `.cargo/config.toml`), so the binary is tuned for the computer that compiled it (AVX2/AVX-512 or NEON). Copy it only to machines with the same or a newer CPU.
 
 ## Using the results
 

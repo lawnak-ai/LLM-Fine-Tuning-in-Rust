@@ -12,12 +12,8 @@ default-run = "llm-finetune"
 default = []
 # NVIDIA GPUs (requires the CUDA toolkit / nvcc at build time).
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
-cudnn = ["cuda", "candle-core/cudnn"]
 # Apple GPUs.
 metal = ["candle-core/metal", "candle-nn/metal"]
-# Faster CPU math libraries.
-mkl = ["candle-core/mkl", "candle-nn/mkl"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 
 [dependencies]
 candle-core = "0.11.0"
