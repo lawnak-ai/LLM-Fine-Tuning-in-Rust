@@ -100,7 +100,10 @@ pub fn parse_export_quant(s: &str) -> Result<Option<GgmlDType>> {
     }
 }
 
-fn adapters(model: &Model) -> Result<(&LoraConfig, Vec<(usize, Proj, &Lora)>)> {
+/// (layer, projection, adapter)
+type AdapterList<'a> = Vec<(usize, Proj, &'a Lora)>;
+
+fn adapters(model: &Model) -> Result<(&LoraConfig, AdapterList<'_>)> {
     let cfg = model.lora.as_ref().context("no LoRA adapter is loaded — train or load one first")?;
     let mut v = vec![];
     for (i, b) in model.blocks.iter().enumerate() {

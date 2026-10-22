@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LLM Fine-Tuning Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%222%22 y=%222%22 width=%2220%22 height=%2220%22 rx=%226%22 fill=%22%232563eb%22/%3E%3Cpath d=%22M7 15l3-6 3 4 2-3 2 5%22 stroke=%22white%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --border: #dde1e7; --text: #1b1f24; --muted: #5f6b7a;
@@ -146,7 +147,7 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
       <span class="chip" id="chip-device"><span class="dot"></span><span>device</span></span>
       <span class="chip" id="chip-model"><span class="dot"></span><span>no model</span></span>
       <span class="chip" id="chip-train"><span class="dot"></span><span>idle</span></span>
-      <button class="btn small" id="theme-btn" title="Switch light / dark theme" aria-label="Switch theme">◐</button>
+      <button class="btn small" id="theme-btn" title="Switch light / dark theme" aria-label="Switch theme"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
     </div>
   </div>
   <nav class="tabs" role="tablist">
@@ -582,7 +583,10 @@ $("#model-load").onclick = async () => {
   if (!path) return toast("Choose a model first", "err");
   try {
     await api("/api/model/load", { method: "POST", json: { path, device: deviceString(), precision: $("#precision").value } });
-    watchTask("#model-task", async res => { renderModel(res); toast("Model loaded", "ok"); checkTrainReady(); });
+    watchTask("#model-task", async res => {
+      renderModel(res); toast("Model loaded", "ok"); checkTrainReady();
+      $("#model-task").innerHTML = `Model loaded. <a href="#" data-goto="data">Next: add training data →</a>`;
+    });
   } catch (e) { toast(e.message, "err"); }
 };
 $("#model-unload").onclick = async () => {
@@ -625,7 +629,7 @@ async function uploadData(files) {
     if (r.errors && r.errors.length) {
       st.className = "notice err";
       st.innerHTML = r.errors.map(e => `<b>${esc(e.file)}</b>: ${esc(e.error)}`).join("<br>");
-    } else { st.className = "notice ok"; st.textContent = `Added ${r.added} file(s).`; }
+    } else { st.className = "notice ok"; st.innerHTML = `Added ${r.added} file(s). <a href="#" data-goto="train">Next: train →</a>`; }
   } catch (e) { st.className = "notice err"; st.textContent = e.message; }
 }
 $("#paste-add").onclick = async () => {

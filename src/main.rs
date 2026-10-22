@@ -31,7 +31,7 @@ enum Cmd {
     /// Start the web UI (default).
     Serve(ServeArgs),
     /// Fine-tune from the command line.
-    Train(TrainArgs),
+    Train(Box<TrainArgs>),
     /// Generate text with a model (and optional adapter).
     Generate(GenArgs),
     /// Merge an adapter into a model and write a GGUF / safetensors model.
