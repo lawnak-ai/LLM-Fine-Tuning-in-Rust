@@ -1,8 +1,5 @@
-//! Turn uploaded files into text documents, tables of records, or conversations.
-//!
-//! Supported: PDF, Word (.docx), OpenDocument text (.odt), Excel (.xlsx),
-//! CSV / TSV, XML, JSON / JSONL (incl. ShareGPT / OpenAI "messages"),
-//! HTML, Markdown and plain text.
+//! Reads uploaded files (pdf, docx, odt, xlsx, csv/tsv, xml, json/jsonl, html, text)
+//! into plain text, table rows or conversations.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -17,7 +14,10 @@ pub enum Extracted {
     /// Free text documents (used for continued pre-training).
     Text(Vec<String>),
     /// Tabular records (column names + rows).
-    Records { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Records {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     /// Ready-made chat conversations.
     Conversations(Vec<Conversation>),
 }
@@ -54,7 +54,8 @@ pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted> {
 
 fn looks_binary(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(4096)];
-    head.iter().filter(|&&b| b == 0).count() > head.len() / 32 && !(head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]))
+    head.iter().filter(|&&b| b == 0).count() > head.len() / 32
+        && !(head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]))
 }
 
 /// Decode UTF-8 (with or without BOM) or UTF-16 with BOM; fall back to lossy UTF-8.
@@ -65,7 +66,13 @@ pub fn decode_text(bytes: &[u8]) -> String {
     let utf16 = |be: bool| -> String {
         let units: Vec<u16> = bytes[2..]
             .chunks_exact(2)
-            .map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
+            .map(|c| {
+                if be {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
             .collect();
         String::from_utf16_lossy(&units)
     };
@@ -84,7 +91,11 @@ pub fn decode_text(bytes: &[u8]) -> String {
 
 /// Normalise whitespace while keeping paragraph structure.
 pub fn clean_text(s: &str) -> String {
-    let s = s.replace("\r\n", "\n").replace('\r', "\n").replace('\u{0c}', "\n\n").replace('\u{a0}', " ");
+    let s = s
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\u{0c}', "\n\n")
+        .replace('\u{a0}', " ");
     let mut out = String::with_capacity(s.len());
     let mut blank = 0;
     for line in s.lines() {
@@ -140,15 +151,21 @@ fn fix_pdf_hyphenation(s: &str) -> String {
 }
 
 fn zip_file(bytes: &[u8], inner: &str) -> Result<String> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).context("not a valid zip-based document")?;
-    let mut f = zip.by_name(inner).with_context(|| format!("{inner} not found in document"))?;
+    let mut zip =
+        zip::ZipArchive::new(Cursor::new(bytes)).context("not a valid zip-based document")?;
+    let mut f = zip
+        .by_name(inner)
+        .with_context(|| format!("{inner} not found in document"))?;
     let mut s = String::new();
     f.read_to_string(&mut s)?;
     Ok(s)
 }
 
 fn xml_doc(s: &str) -> Result<roxmltree::Document<'_>> {
-    let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+    let opts = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
     roxmltree::Document::parse_with_options(s, opts).map_err(|e| anyhow!("invalid XML: {e}"))
 }
 
@@ -215,9 +232,15 @@ fn odt_text(bytes: &[u8]) -> Result<String> {
     let xml = zip_file(bytes, "content.xml")?;
     let doc = xml_doc(&xml)?;
     let mut out = String::new();
-    for n in doc.descendants().filter(|n| matches!(n.tag_name().name(), "p" | "h")) {
+    for n in doc
+        .descendants()
+        .filter(|n| matches!(n.tag_name().name(), "p" | "h"))
+    {
         // Skip paragraphs nested in other paragraphs (they are visited through the parent).
-        if n.ancestors().skip(1).any(|a| matches!(a.tag_name().name(), "p" | "h")) {
+        if n.ancestors()
+            .skip(1)
+            .any(|a| matches!(a.tag_name().name(), "p" | "h"))
+        {
             continue;
         }
         for d in n.descendants() {
@@ -251,7 +274,12 @@ fn xlsx_records(bytes: &[u8]) -> Result<Extracted> {
             let doc = xml_doc(&xml)?;
             doc.descendants()
                 .filter(|n| n.tag_name().name() == "si")
-                .map(|si| si.descendants().filter(|t| t.tag_name().name() == "t").filter_map(|t| t.text()).collect::<String>())
+                .map(|si| {
+                    si.descendants()
+                        .filter(|t| t.tag_name().name() == "t")
+                        .filter_map(|t| t.text())
+                        .collect::<String>()
+                })
                 .collect()
         }
         Err(_) => vec![],
@@ -261,13 +289,29 @@ fn xlsx_records(bytes: &[u8]) -> Result<Extracted> {
     let mut rows: Vec<Vec<String>> = vec![];
     for row in doc.descendants().filter(|n| n.tag_name().name() == "row") {
         let mut cells: Vec<String> = vec![];
-        for (i, c) in row.children().filter(|n| n.tag_name().name() == "c").enumerate() {
+        for (i, c) in row
+            .children()
+            .filter(|n| n.tag_name().name() == "c")
+            .enumerate()
+        {
             let idx = c.attribute("r").map(col_index).unwrap_or(i);
             let t = c.attribute("t").unwrap_or("");
-            let v = c.children().find(|n| n.tag_name().name() == "v").and_then(|n| n.text()).unwrap_or("");
+            let v = c
+                .children()
+                .find(|n| n.tag_name().name() == "v")
+                .and_then(|n| n.text())
+                .unwrap_or("");
             let val = match t {
-                "s" => v.parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or_default(),
-                "inlineStr" => c.descendants().filter(|n| n.tag_name().name() == "t").filter_map(|n| n.text()).collect(),
+                "s" => v
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| shared.get(i).cloned())
+                    .unwrap_or_default(),
+                "inlineStr" => c
+                    .descendants()
+                    .filter(|n| n.tag_name().name() == "t")
+                    .filter_map(|n| n.text())
+                    .collect(),
                 _ => v.to_string(),
             };
             if cells.len() <= idx {
@@ -287,10 +331,19 @@ fn xlsx_records(bytes: &[u8]) -> Result<Extracted> {
 }
 
 fn make_records(header: Vec<String>, mut rows: Vec<Vec<String>>) -> Extracted {
-    let width = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(header.len());
+    let width = rows
+        .iter()
+        .map(|r| r.len())
+        .max()
+        .unwrap_or(0)
+        .max(header.len());
     let mut columns: Vec<String> = Vec::with_capacity(width);
     for i in 0..width {
-        let name = header.get(i).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| format!("column{}", i + 1));
+        let name = header
+            .get(i)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("column{}", i + 1));
         let mut unique = name.clone();
         let mut k = 2;
         while columns.contains(&unique) {
@@ -314,7 +367,11 @@ fn csv_records(text: &str, delim: Option<u8>) -> Result<Extracted> {
             .max_by_key(|d| first.bytes().filter(|b| b == d).count())
             .unwrap_or(b',')
     });
-    let mut rdr = csv::ReaderBuilder::new().delimiter(delim).flexible(true).has_headers(true).from_reader(text.as_bytes());
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(delim)
+        .flexible(true)
+        .has_headers(true)
+        .from_reader(text.as_bytes());
     let header: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
     let mut rows = vec![];
     for rec in rdr.records() {
@@ -342,17 +399,27 @@ fn xml_extract(text: &str) -> Result<Extracted> {
             *counts.entry(n.tag_name().name().to_string()).or_insert(0) += 1;
         }
     }
-    let best = counts.into_iter().filter(|(_, c)| *c >= 2).max_by_key(|(_, c)| *c);
+    let best = counts
+        .into_iter()
+        .filter(|(_, c)| *c >= 2)
+        .max_by_key(|(_, c)| *c);
     if let Some((tag, _)) = best {
         let mut columns: Vec<String> = vec![];
         let mut maps: Vec<HashMap<String, String>> = vec![];
-        for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == tag) {
+        for n in doc
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == tag)
+        {
             let mut m = HashMap::new();
             for a in n.attributes() {
                 m.insert(a.name().to_string(), a.value().to_string());
             }
             for k in n.children().filter(|c| c.is_element()) {
-                let v: String = k.descendants().filter(|d| d.is_text()).filter_map(|d| d.text()).collect();
+                let v: String = k
+                    .descendants()
+                    .filter(|d| d.is_text())
+                    .filter_map(|d| d.text())
+                    .collect();
                 m.insert(k.tag_name().name().to_string(), v.trim().to_string());
             }
             for key in m.keys() {
@@ -362,7 +429,15 @@ fn xml_extract(text: &str) -> Result<Extracted> {
             }
             maps.push(m);
         }
-        let rows = maps.into_iter().map(|m| columns.iter().map(|c| m.get(c).cloned().unwrap_or_default()).collect()).collect();
+        let rows = maps
+            .into_iter()
+            .map(|m| {
+                columns
+                    .iter()
+                    .map(|c| m.get(c).cloned().unwrap_or_default())
+                    .collect()
+            })
+            .collect();
         return Ok(Extracted::Records { columns, rows });
     }
     // Document-like XML: keep the text.
@@ -387,12 +462,26 @@ fn json_to_string(v: &Json) -> String {
 
 /// OpenAI / ShareGPT style message lists -> conversation.
 fn conversation_from(obj: &serde_json::Map<String, Json>) -> Option<Conversation> {
-    let msgs = obj.get("messages").or_else(|| obj.get("conversations")).or_else(|| obj.get("conversation"))?.as_array()?;
+    let msgs = obj
+        .get("messages")
+        .or_else(|| obj.get("conversations"))
+        .or_else(|| obj.get("conversation"))?
+        .as_array()?;
     let mut conv = Conversation::default();
     let mut pending_user: Option<String> = None;
     for m in msgs {
-        let role = m.get("role").or_else(|| m.get("from")).and_then(|r| r.as_str()).unwrap_or("").to_ascii_lowercase();
-        let content = m.get("content").or_else(|| m.get("value")).or_else(|| m.get("text")).map(json_to_string).unwrap_or_default();
+        let role = m
+            .get("role")
+            .or_else(|| m.get("from"))
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let content = m
+            .get("content")
+            .or_else(|| m.get("value"))
+            .or_else(|| m.get("text"))
+            .map(json_to_string)
+            .unwrap_or_default();
         match role.as_str() {
             "system" => conv.system = Some(content),
             "user" | "human" | "prompter" => {
@@ -423,7 +512,8 @@ fn objects_to_extracted(items: Vec<Json>) -> Result<Extracted> {
     if items.iter().all(|v| v.is_string()) {
         return Ok(Extracted::Text(items.iter().map(json_to_string).collect()));
     }
-    let objs: Vec<&serde_json::Map<String, Json>> = items.iter().filter_map(|v| v.as_object()).collect();
+    let objs: Vec<&serde_json::Map<String, Json>> =
+        items.iter().filter_map(|v| v.as_object()).collect();
     if objs.is_empty() {
         bail!("expected a list of objects or strings");
     }
@@ -439,7 +529,15 @@ fn objects_to_extracted(items: Vec<Json>) -> Result<Extracted> {
             }
         }
     }
-    let rows = objs.iter().map(|o| columns.iter().map(|c| o.get(c).map(json_to_string).unwrap_or_default()).collect()).collect();
+    let rows = objs
+        .iter()
+        .map(|o| {
+            columns
+                .iter()
+                .map(|c| o.get(c).map(json_to_string).unwrap_or_default())
+                .collect()
+        })
+        .collect();
     Ok(Extracted::Records { columns, rows })
 }
 
@@ -456,7 +554,11 @@ fn json_extract(text: &str) -> Result<Extracted> {
                 return Ok(Extracted::Conversations(vec![c]));
             }
             // {"data": [...]} or similar wrapper.
-            if let Some(arr) = o.values().filter_map(|v| v.as_array()).max_by_key(|a| a.len()) {
+            if let Some(arr) = o
+                .values()
+                .filter_map(|v| v.as_array())
+                .max_by_key(|a| a.len())
+            {
                 if !arr.is_empty() {
                     return objects_to_extracted(arr.clone());
                 }
@@ -478,7 +580,10 @@ fn jsonl_extract(text: &str) -> Result<Extracted> {
         if line.is_empty() {
             continue;
         }
-        items.push(serde_json::from_str::<Json>(line).with_context(|| format!("invalid JSON on line {}", i + 1))?);
+        items.push(
+            serde_json::from_str::<Json>(line)
+                .with_context(|| format!("invalid JSON on line {}", i + 1))?,
+        );
     }
     objects_to_extracted(items)
 }
@@ -495,13 +600,40 @@ pub fn html_to_text(html: &str) -> String {
                 Some(e) => i + e,
                 None => break,
             };
-            let tag = lower[i + 1..end].trim_start_matches('/').split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or("").to_string();
+            let tag = lower[i + 1..end]
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or("")
+                .to_string();
             if (tag == "script" || tag == "style") && !lower[i + 1..end].starts_with('/') {
                 let close = format!("</{tag}");
-                i = lower[end..].find(&close).map(|p| end + p).unwrap_or(html.len());
+                i = lower[end..]
+                    .find(&close)
+                    .map(|p| end + p)
+                    .unwrap_or(html.len());
                 continue;
             }
-            if matches!(tag.as_str(), "p" | "div" | "br" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "section" | "article" | "table" | "ul" | "ol" | "pre" | "blockquote") {
+            if matches!(
+                tag.as_str(),
+                "p" | "div"
+                    | "br"
+                    | "li"
+                    | "tr"
+                    | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "section"
+                    | "article"
+                    | "table"
+                    | "ul"
+                    | "ol"
+                    | "pre"
+                    | "blockquote"
+            ) {
                 out.push('\n');
             }
             if tag == "td" || tag == "th" {
@@ -520,8 +652,12 @@ pub fn html_to_text(html: &str) -> String {
                         "quot" => Some('"'),
                         "apos" | "#39" => Some('\''),
                         "nbsp" => Some(' '),
-                        _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32),
-                        _ if ent.starts_with('#') => ent[1..].parse::<u32>().ok().and_then(char::from_u32),
+                        _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16)
+                            .ok()
+                            .and_then(char::from_u32),
+                        _ if ent.starts_with('#') => {
+                            ent[1..].parse::<u32>().ok().and_then(char::from_u32)
+                        }
                         _ => None,
                     };
                     match rep {
@@ -555,7 +691,11 @@ mod tests {
 
     #[test]
     fn csv_detects_delimiter() {
-        let e = extract("a.csv", b"question;answer\nWhat is 2+2?;4\nCapital of France?;Paris\n").unwrap();
+        let e = extract(
+            "a.csv",
+            b"question;answer\nWhat is 2+2?;4\nCapital of France?;Paris\n",
+        )
+        .unwrap();
         match e {
             Extracted::Records { columns, rows } => {
                 assert_eq!(columns, vec!["question", "answer"]);

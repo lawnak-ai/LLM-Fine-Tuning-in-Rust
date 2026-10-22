@@ -17,7 +17,11 @@ use llm_finetune::train::{self, TrainConfig, TrainJob, TrainStatus};
 use llm_finetune::util::human_count;
 
 #[derive(Parser)]
-#[command(name = "llm-finetune", version, about = "LLM fine-tuning (LoRA / QLoRA) in Rust — web UI + CLI")]
+#[command(
+    name = "llm-finetune",
+    version,
+    about = "LoRA fine-tuning for LLMs (web UI and CLI)"
+)]
 struct Cli {
     /// Number of CPU threads (default: all cores).
     #[arg(long, global = true)]
@@ -58,7 +62,12 @@ struct ServeArgs {
 
 impl Default for ServeArgs {
     fn default() -> Self {
-        Self { host: "127.0.0.1".into(), port: 7860, work_dir: "workspace".into(), models_dir: None }
+        Self {
+            host: "127.0.0.1".into(),
+            port: 7860,
+            work_dir: "workspace".into(),
+            models_dir: None,
+        }
     }
 }
 
@@ -182,10 +191,20 @@ struct TokenizeArgs {
     no_special: bool,
 }
 
-fn load(args: &ModelArgs) -> Result<(llm_finetune::model::Model, llm_finetune::tokenizer::Tokenizer)> {
+fn load(
+    args: &ModelArgs,
+) -> Result<(
+    llm_finetune::model::Model,
+    llm_finetune::tokenizer::Tokenizer,
+)> {
     let device = DeviceChoice::parse(&args.device)?.create()?;
     eprintln!("device: {}", device_label(&device));
-    let (m, t) = load_model(&args.model, &device, BasePrecision::parse(&args.precision)?, &|s| eprintln!("{s}"))?;
+    let (m, t) = load_model(
+        &args.model,
+        &device,
+        BasePrecision::parse(&args.precision)?,
+        &|s| eprintln!("{s}"),
+    )?;
     eprintln!(
         "model: {} ({}, {} params, {} layers, weights {})",
         m.cfg.name,
@@ -204,9 +223,13 @@ fn main() -> Result<()> {
     }
     match cli.cmd.unwrap_or(Cmd::Serve(ServeArgs::default())) {
         Cmd::Serve(a) => {
-            let addr: SocketAddr = format!("{}:{}", a.host, a.port).parse().context("bad host/port")?;
+            let addr: SocketAddr = format!("{}:{}", a.host, a.port)
+                .parse()
+                .context("bad host/port")?;
             let state = AppState::new(a.work_dir, a.models_dir)?;
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
             rt.block_on(server::serve(state, addr))
         }
         Cmd::Info(a) => {
@@ -239,7 +262,10 @@ fn main() -> Result<()> {
                 t.encode(&a.prompt, true, true)
             } else {
                 let fmt = ChatFormatter::new(TemplateKind::parse(&a.template)?, &t);
-                let r = fmt.render(&Conversation::single(a.system.clone(), a.prompt.clone(), None), true)?;
+                let r = fmt.render(
+                    &Conversation::single(a.system.clone(), a.prompt.clone(), None),
+                    true,
+                )?;
                 t.encode(&r.text, !fmt.starts_with_bos(&r.text), true)
             };
             let p = GenParams {
@@ -260,7 +286,11 @@ fn main() -> Result<()> {
             println!();
             eprintln!(
                 "[{} prompt tokens in {:.2}s, {} tokens at {:.1} tok/s, stop: {}]",
-                stats.prompt_tokens, stats.prompt_secs, stats.generated_tokens, stats.tokens_per_sec, stats.stop_reason
+                stats.prompt_tokens,
+                stats.prompt_secs,
+                stats.generated_tokens,
+                stats.tokens_per_sec,
+                stats.stop_reason
             );
             Ok(())
         }
@@ -269,7 +299,13 @@ fn main() -> Result<()> {
             eprintln!("{}", export::load_adapter(&mut m, &a.adapter)?);
             let is_gguf = a.output.extension().map(|e| e == "gguf").unwrap_or(false);
             let out = if is_gguf {
-                export::export_merged_gguf(&m, &t, &a.output, export::parse_export_quant(&a.quant)?, &|s| eprintln!("{s}"))?
+                export::export_merged_gguf(
+                    &m,
+                    &t,
+                    &a.output,
+                    export::parse_export_quant(&a.quant)?,
+                    &|s| eprintln!("{s}"),
+                )?
             } else {
                 export::export_merged_safetensors(&m, &a.output, &|s| eprintln!("{s}"))?
             };
@@ -302,7 +338,11 @@ fn main() -> Result<()> {
             set!(seed, a.seed);
             set!(eval_fraction, a.eval_fraction);
             if let Some(t) = &a.targets {
-                cfg.target_modules = t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                cfg.target_modules = t
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
             }
             if a.text_only {
                 cfg.data_mode = "text".into();
@@ -312,11 +352,18 @@ fn main() -> Result<()> {
             }
             let mut datasets = vec![];
             for (i, p) in a.data.iter().enumerate() {
-                let bytes = std::fs::read(p).with_context(|| format!("cannot read {}", p.display()))?;
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let bytes =
+                    std::fs::read(p).with_context(|| format!("cannot read {}", p.display()))?;
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let d = Dataset::from_bytes(format!("d{i}"), &name, &bytes)?;
                 let s = d.summary();
-                eprintln!("data: {name}: {} documents, {} conversations, {} characters", s.documents, s.conversations, s.characters);
+                eprintln!(
+                    "data: {name}: {} documents, {} conversations, {} characters",
+                    s.documents, s.conversations, s.characters
+                );
                 datasets.push(d);
             }
             let (m, t) = load(&a.model)?;
@@ -340,7 +387,9 @@ fn main() -> Result<()> {
             if let Some(q) = &a.merge_gguf {
                 let m = model.read().unwrap();
                 let out = a.output.join("merged.gguf");
-                export::export_merged_gguf(&m, &tok, &out, export::parse_export_quant(q)?, &|s| eprintln!("{s}"))?;
+                export::export_merged_gguf(&m, &tok, &out, export::parse_export_quant(q)?, &|s| {
+                    eprintln!("{s}")
+                })?;
                 eprintln!("merged model: {}", out.display());
             }
             Ok(())

@@ -1,11 +1,5 @@
-//! LLM fine-tuning from scratch in Rust.
-//!
-//! * [`model`]     — Llama-family transformer with frozen (optionally quantized) weights and LoRA.
-//! * [`tokenizer`] — SentencePiece and byte-level BPE tokenizers read from GGUF / tokenizer.json.
-//! * [`data`]      — PDF, Word, Excel, CSV, XML, JSON, HTML and text ingestion.
-//! * [`train`]     — the training loop (AdamW, schedules, checkpointing, chunked loss).
-//! * [`export`]    — PEFT / GGUF adapters and merged GGUF / safetensors models.
-//! * [`server`]    — the web UI and its JSON API.
+//! LoRA fine-tuning for llama-style models: model, tokenizer, data loading,
+//! training loop, export and the web server.
 
 pub mod chat;
 pub mod data;

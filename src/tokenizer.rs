@@ -1,15 +1,8 @@
-//! A from-scratch tokenizer that understands the two vocabularies used by
-//! llama-family models:
+//! Tokenizer for llama-family vocabularies, read from GGUF metadata or tokenizer.json.
 //!
-//! * SentencePiece style (`tokenizer.ggml.model = "llama"`): score driven
-//!   bigram merging with byte fallback (Llama 1/2, Mistral, TinyLlama, ...).
-//! * Byte-level BPE (`tokenizer.ggml.model = "gpt2"`): regex pre-tokenisation,
-//!   GPT-2 byte to unicode mapping and rank ordered merges (Llama 3, Qwen,
-//!   SmolLM, ...).
-//!
-//! Vocabularies are read either from GGUF metadata or from a Hugging Face
-//! `tokenizer.json`. The algorithms follow llama.cpp so that token ids match
-//! what llama.cpp / Ollama / LM Studio produce for the same model.
+//! Two kinds are supported: SentencePiece style ("llama": score-based merges with
+//! byte fallback) and byte-level BPE ("gpt2": regex pre-split + ranked merges).
+//! The merge logic follows llama.cpp so the ids match what it produces.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -59,9 +52,19 @@ fn pre_tokenizer_for(name: &str) -> (Vec<&'static str>, bool, Option<bool>) {
         "starcoder" | "refact" | "command-r" | "smollm" | "codeshell" | "exaone" | "minerva-7b" => {
             (vec![r"\p{N}", RE_GPT2], false, None)
         }
-        "falcon" => (vec![r"[\p{P}\$\+<=>\^~\|`]+", RE_GPT2, r"[0-9][0-9][0-9]"], false, None),
+        "falcon" => (
+            vec![r"[\p{P}\$\+<=>\^~\|`]+", RE_GPT2, r"[0-9][0-9][0-9]"],
+            false,
+            None,
+        ),
         "deepseek-coder" => (
-            vec![r"[\r\n]", r"\s?\p{L}+", r"\s?\p{P}+", r"[一-龥ࠀ-一가-퟿]+", r"\p{N}"],
+            vec![
+                r"[\r\n]",
+                r"\s?\p{L}+",
+                r"\s?\p{P}+",
+                r"[一-龥ࠀ-一가-퟿]+",
+                r"\p{N}",
+            ],
             false,
             None,
         ),
@@ -77,9 +80,11 @@ fn pre_tokenizer_for(name: &str) -> (Vec<&'static str>, bool, Option<bool>) {
             false,
             None,
         ),
-        "deepseek-v3" | "hunyuan-dense" | "joyai-llm" | "hy_v4" => {
-            (vec![r"\p{N}{1,3}", r"[一-龥぀-ゟ゠-ヿ]+", RE_DEEPSEEK3], false, None)
-        }
+        "deepseek-v3" | "hunyuan-dense" | "joyai-llm" | "hy_v4" => (
+            vec![r"\p{N}{1,3}", r"[一-龥぀-ゟ゠-ヿ]+", RE_DEEPSEEK3],
+            false,
+            None,
+        ),
         "poro-chat" | "bloom" | "gpt3-finnish" => (vec![RE_BLOOM], false, None),
         "viking" => (vec![RE_BLOOM, r"\p{N}"], false, None),
         // "default", "gpt-2", "mpt", "olmo", "jais", "phi-2", ... and anything unknown.
@@ -227,7 +232,10 @@ struct BpeBigram {
 impl Ord for BpeBigram {
     fn cmp(&self, other: &Self) -> Ordering {
         // Max-heap: lowest rank first, then the leftmost pair.
-        other.rank.cmp(&self.rank).then_with(|| other.left.cmp(&self.left))
+        other
+            .rank
+            .cmp(&self.rank)
+            .then_with(|| other.left.cmp(&self.left))
     }
 }
 impl PartialOrd for BpeBigram {
@@ -255,7 +263,11 @@ fn init_symbols(text: &str) -> Vec<Sym> {
             start,
             end,
             prev: if idx == 0 { None } else { Some(idx - 1) },
-            next: if iter.peek().is_some() { Some(idx + 1) } else { None },
+            next: if iter.peek().is_some() {
+                Some(idx + 1)
+            } else {
+                None
+            },
             id: None,
         });
     }
@@ -284,10 +296,16 @@ impl Tokenizer {
         }
         let mut merges = HashMap::with_capacity(merges_text.len());
         for (rank, m) in merges_text.iter().enumerate() {
-            let Some((l, r)) = m.split_once(' ') else { continue };
-            let (Some(&li), Some(&ri)) = (token_to_id.get(l), token_to_id.get(r)) else { continue };
+            let Some((l, r)) = m.split_once(' ') else {
+                continue;
+            };
+            let (Some(&li), Some(&ri)) = (token_to_id.get(l), token_to_id.get(r)) else {
+                continue;
+            };
             let merged = format!("{l}{r}");
-            let Some(&mi) = token_to_id.get(&merged) else { continue };
+            let Some(&mi) = token_to_id.get(&merged) else {
+                continue;
+            };
             merges.entry((li, ri)).or_insert((rank as u32, mi));
         }
         let mut compiled = Vec::new();
@@ -295,14 +313,22 @@ impl Tokenizer {
             compiled.push(Regex::new(r).with_context(|| format!("bad pre-tokenizer regex {r}"))?);
         }
         let byte_encoder = bytes_to_unicode();
-        let byte_decoder = byte_encoder.iter().enumerate().map(|(b, c)| (*c, b as u8)).collect();
+        let byte_decoder = byte_encoder
+            .iter()
+            .enumerate()
+            .map(|(b, c)| (*c, b as u8))
+            .collect();
         let mut byte_tokens = vec![None; 256];
         for (b, slot) in byte_tokens.iter_mut().enumerate() {
             *slot = token_to_id.get(&format!("<0x{b:02X}>")).copied();
         }
         let mut tok = Self {
             kind,
-            scores: if scores.len() == n { scores } else { vec![0.0; n] },
+            scores: if scores.len() == n {
+                scores
+            } else {
+                vec![0.0; n]
+            },
             tokens,
             token_to_id,
             token_types,
@@ -382,12 +408,20 @@ impl Tokenizer {
         let token_types: Vec<i32> = md
             .get("tokenizer.ggml.token_type")
             .and_then(|v| v.to_vec().ok())
-            .map(|v| v.iter().map(|x| value_as_i32(x).unwrap_or(TOKEN_NORMAL)).collect())
+            .map(|v| {
+                v.iter()
+                    .map(|x| value_as_i32(x).unwrap_or(TOKEN_NORMAL))
+                    .collect()
+            })
             .unwrap_or_default();
         let merges: Vec<String> = md
             .get("tokenizer.ggml.merges")
             .and_then(|v| v.to_vec().ok())
-            .map(|v| v.iter().map(|x| x.to_string().cloned().unwrap_or_default()).collect())
+            .map(|v| {
+                v.iter()
+                    .map(|x| x.to_string().cloned().unwrap_or_default())
+                    .collect()
+            })
             .unwrap_or_default();
         let pre = md
             .get("tokenizer.ggml.pre")
@@ -474,7 +508,11 @@ impl Tokenizer {
             } else if let Some(t) = std::fs::read_to_string(dir.join("chat_template.json"))
                 .ok()
                 .and_then(|s| serde_json::from_str::<Json>(&s).ok())
-                .and_then(|j| j.get("chat_template").and_then(|t| t.as_str()).map(String::from))
+                .and_then(|j| {
+                    j.get("chat_template")
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })
             {
                 tok.chat_template = Some(t);
             }
@@ -488,7 +526,9 @@ impl Tokenizer {
         if mtype != "BPE" {
             bail!("unsupported tokenizer.json model type '{mtype}' (only BPE is supported)");
         }
-        let vocab = model["vocab"].as_object().context("tokenizer.json: model.vocab missing")?;
+        let vocab = model["vocab"]
+            .as_object()
+            .context("tokenizer.json: model.vocab missing")?;
         let mut max_id = vocab.values().filter_map(|v| v.as_u64()).max().unwrap_or(0) as usize;
         let added = j["added_tokens"].as_array().cloned().unwrap_or_default();
         for a in &added {
@@ -572,7 +612,8 @@ impl Tokenizer {
                 "Metaspace" => {
                     *metaspace = true;
                     let scheme = p["prepend_scheme"].as_str().unwrap_or("always");
-                    *prefix_space = p["add_prefix_space"].as_bool().unwrap_or(true) && scheme != "never";
+                    *prefix_space =
+                        p["add_prefix_space"].as_bool().unwrap_or(true) && scheme != "never";
                 }
                 "" => {}
                 other => bail!("unsupported pre-tokenizer '{other}' in tokenizer.json"),
@@ -580,7 +621,13 @@ impl Tokenizer {
             Ok(())
         }
         if !j["pre_tokenizer"].is_null() {
-            walk_pre(&j["pre_tokenizer"], &mut regexes, &mut byte_level, &mut metaspace, &mut prefix_space)?;
+            walk_pre(
+                &j["pre_tokenizer"],
+                &mut regexes,
+                &mut byte_level,
+                &mut metaspace,
+                &mut prefix_space,
+            )?;
         }
         fn walk_norm(n: &Json, nfc: &mut bool, metaspace: &mut bool, prefix: &mut bool) {
             match n["type"].as_str().unwrap_or("") {
@@ -600,7 +647,12 @@ impl Tokenizer {
             }
         }
         if !j["normalizer"].is_null() {
-            walk_norm(&j["normalizer"], &mut nfc, &mut metaspace, &mut prefix_space);
+            walk_norm(
+                &j["normalizer"],
+                &mut nfc,
+                &mut metaspace,
+                &mut prefix_space,
+            );
         }
         let decoder_str = j["decoder"].to_string();
         if decoder_str.contains("\"ByteLevel\"") {
@@ -616,13 +668,21 @@ impl Tokenizer {
         };
         if kind == TokenizerKind::SpmMerges {
             for (i, t) in tokens.iter().enumerate() {
-                if types[i] == TOKEN_NORMAL && t.len() == 6 && t.starts_with("<0x") && t.ends_with('>') {
+                if types[i] == TOKEN_NORMAL
+                    && t.len() == 6
+                    && t.starts_with("<0x")
+                    && t.ends_with('>')
+                {
                     types[i] = TOKEN_BYTE;
                 }
             }
             regexes.clear();
         }
-        let pre_name = if kind == TokenizerKind::ByteBpe { guess_pre_name(&regexes) } else { "spm".into() };
+        let pre_name = if kind == TokenizerKind::ByteBpe {
+            guess_pre_name(&regexes)
+        } else {
+            "spm".into()
+        };
         let mut tok = Self::build(kind, tokens, vec![], types, merges, regexes, pre_name)?;
         tok.ignore_merges = model["ignore_merges"].as_bool().unwrap_or(false);
         tok.add_space_prefix = kind == TokenizerKind::SpmMerges && prefix_space;
@@ -635,7 +695,8 @@ impl Tokenizer {
                 _ => None,
             }
         };
-        let id_of = |tok: &Tokenizer, v: &Json| token_str(v).and_then(|s| tok.token_to_id.get(&s).copied());
+        let id_of =
+            |tok: &Tokenizer, v: &Json| token_str(v).and_then(|s| tok.token_to_id.get(&s).copied());
         let cfg_id = |k: &str| -> Option<u32> {
             match &model_cfg[k] {
                 Json::Number(n) => n.as_u64().map(|x| x as u32),
@@ -716,7 +777,10 @@ impl Tokenizer {
         self.add_space_prefix
     }
     pub fn token_text(&self, id: u32) -> &str {
-        self.tokens.get(id as usize).map(|s| s.as_str()).unwrap_or("")
+        self.tokens
+            .get(id as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
     pub fn token_id(&self, text: &str) -> Option<u32> {
         self.token_to_id.get(text).copied()
@@ -830,7 +894,9 @@ impl Tokenizer {
                 TokenizerKind::ByteBpe => {
                     let c = self.byte_encoder[b as usize];
                     let mut buf = [0u8; 4];
-                    self.token_to_id.get(c.encode_utf8(&mut buf) as &str).copied()
+                    self.token_to_id
+                        .get(c.encode_utf8(&mut buf) as &str)
+                        .copied()
                 }
                 _ => self.byte_tokens[b as usize],
             };
@@ -847,13 +913,19 @@ impl Tokenizer {
         }
         let mut syms = init_symbols(text);
         let mut heap = BinaryHeap::new();
-        let try_add = |heap: &mut BinaryHeap<SpmBigram>, syms: &[Sym], l: Option<usize>, r: Option<usize>| {
-            let (Some(l), Some(r)) = (l, r) else { return };
-            let s = &text[syms[l].start..syms[r].end];
-            if let Some(&id) = self.token_to_id.get(s) {
-                heap.push(SpmBigram { score: self.scores[id as usize], left: l, right: r, size: s.len() });
-            }
-        };
+        let try_add =
+            |heap: &mut BinaryHeap<SpmBigram>, syms: &[Sym], l: Option<usize>, r: Option<usize>| {
+                let (Some(l), Some(r)) = (l, r) else { return };
+                let s = &text[syms[l].start..syms[r].end];
+                if let Some(&id) = self.token_to_id.get(s) {
+                    heap.push(SpmBigram {
+                        score: self.scores[id as usize],
+                        left: l,
+                        right: r,
+                        size: s.len(),
+                    });
+                }
+            };
         for i in 1..syms.len() {
             try_add(&mut heap, &syms, Some(i - 1), Some(i));
         }
@@ -900,13 +972,22 @@ impl Tokenizer {
             s.id = self.token_to_id.get(&word[s.start..s.end]).copied();
         }
         let mut heap = BinaryHeap::new();
-        let try_add = |heap: &mut BinaryHeap<BpeBigram>, syms: &[Sym], l: Option<usize>, r: Option<usize>| {
-            let (Some(l), Some(r)) = (l, r) else { return };
-            let (Some(li), Some(ri)) = (syms[l].id, syms[r].id) else { return };
-            if let Some(&(rank, _)) = self.merges.get(&(li, ri)) {
-                heap.push(BpeBigram { rank, left: l, right: r, left_id: li, right_id: ri });
-            }
-        };
+        let try_add =
+            |heap: &mut BinaryHeap<BpeBigram>, syms: &[Sym], l: Option<usize>, r: Option<usize>| {
+                let (Some(l), Some(r)) = (l, r) else { return };
+                let (Some(li), Some(ri)) = (syms[l].id, syms[r].id) else {
+                    return;
+                };
+                if let Some(&(rank, _)) = self.merges.get(&(li, ri)) {
+                    heap.push(BpeBigram {
+                        rank,
+                        left: l,
+                        right: r,
+                        left_id: li,
+                        right_id: ri,
+                    });
+                }
+            };
         for i in 1..syms.len() {
             try_add(&mut heap, &syms, Some(i - 1), Some(i));
         }
@@ -944,7 +1025,10 @@ impl Tokenizer {
 
     fn encode_bpe_word(&self, piece: &str, out: &mut Vec<u32>) {
         let word: String = if self.kind == TokenizerKind::ByteBpe {
-            piece.bytes().map(|b| self.byte_encoder[b as usize]).collect()
+            piece
+                .bytes()
+                .map(|b| self.byte_encoder[b as usize])
+                .collect()
         } else {
             piece.to_string()
         };
@@ -1028,7 +1112,9 @@ impl Tokenizer {
 
     /// Raw bytes for a single token.
     pub fn token_bytes(&self, id: u32, skip_special: bool) -> Vec<u8> {
-        let Some(text) = self.tokens.get(id as usize) else { return vec![] };
+        let Some(text) = self.tokens.get(id as usize) else {
+            return vec![];
+        };
         match self.token_types[id as usize] {
             TOKEN_CONTROL | TOKEN_UNKNOWN | TOKEN_UNUSED => {
                 if skip_special {
@@ -1040,7 +1126,9 @@ impl Tokenizer {
             TOKEN_USER_DEFINED => text.as_bytes().to_vec(),
             TOKEN_BYTE => {
                 let hex = text.trim_start_matches("<0x").trim_end_matches('>');
-                u8::from_str_radix(hex, 16).map(|b| vec![b]).unwrap_or_default()
+                u8::from_str_radix(hex, 16)
+                    .map(|b| vec![b])
+                    .unwrap_or_default()
             }
             _ => match self.kind {
                 TokenizerKind::ByteBpe => {
@@ -1104,7 +1192,14 @@ mod tests {
         let enc = bytes_to_unicode();
         let mut tokens: Vec<String> = enc.iter().map(|c| c.to_string()).collect();
         let sp = enc[b' ' as usize];
-        let extra = [format!("{sp}h"), "he".into(), "ll".into(), "hell".into(), "hello".into(), format!("{sp}hello")];
+        let extra = [
+            format!("{sp}h"),
+            "he".into(),
+            "ll".into(),
+            "hell".into(),
+            "hello".into(),
+            format!("{sp}hello"),
+        ];
         tokens.extend(extra.iter().cloned());
         tokens.push("<|end|>".into());
         let mut types = vec![TOKEN_NORMAL; tokens.len()];
@@ -1116,8 +1211,16 @@ mod tests {
             "hell o".into(),
             format!("{sp} hello"),
         ];
-        Tokenizer::build(TokenizerKind::ByteBpe, tokens, vec![], types, merges, vec![RE_GPT2.into()], "gpt-2".into())
-            .unwrap()
+        Tokenizer::build(
+            TokenizerKind::ByteBpe,
+            tokens,
+            vec![],
+            types,
+            merges,
+            vec![RE_GPT2.into()],
+            "gpt-2".into(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1143,7 +1246,14 @@ mod tests {
             tokens.push(format!("<0x{b:02X}>"));
             types.push(TOKEN_BYTE);
         }
-        for (s, _) in [("▁", 0), ("h", 0), ("i", 0), ("hi", 0), ("▁hi", 0), ("!", 0)] {
+        for (s, _) in [
+            ("▁", 0),
+            ("h", 0),
+            ("i", 0),
+            ("hi", 0),
+            ("▁hi", 0),
+            ("!", 0),
+        ] {
             tokens.push(s.to_string());
             types.push(TOKEN_NORMAL);
         }
@@ -1152,7 +1262,16 @@ mod tests {
         let shi = tokens.iter().position(|t| t == "▁hi").unwrap();
         scores[hi] = -1.0;
         scores[shi] = -0.5;
-        let mut t = Tokenizer::build(TokenizerKind::SpmScores, tokens, scores, types, vec![], vec![], "spm".into()).unwrap();
+        let mut t = Tokenizer::build(
+            TokenizerKind::SpmScores,
+            tokens,
+            scores,
+            types,
+            vec![],
+            vec![],
+            "spm".into(),
+        )
+        .unwrap();
         t.add_space_prefix = true;
         t.bos = Some(1);
         t.add_bos = true;

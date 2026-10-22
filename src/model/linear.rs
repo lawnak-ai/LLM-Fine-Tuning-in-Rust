@@ -1,14 +1,10 @@
-//! Frozen base weights (dense or GGUF-quantized) and trainable LoRA adapters.
+//! Frozen base weights (dense or quantized) and LoRA adapters.
 //!
-//! The base model never receives gradients. Plain `x.matmul(w)` would still make
-//! candle's autograd compute (and keep) a full gradient for every frozen weight,
-//! which doubles memory and wastes a third of the compute. Instead the forward
-//! product is computed outside of autograd and re-attached with
-//! [`ops::attach`](super::ops::attach), whose backward pass only produces
-//! `dL/dx = dL/dy · W`.
-//!
-//! For quantized weights this is exactly QLoRA: the forward pass uses the
-//! quantized matmul kernels and the backward pass dequantizes on the fly.
+//! Base weights never get gradients. A plain matmul would make autograd compute
+//! a gradient for every frozen weight, so the product is computed outside the
+//! graph and re-attached with `ops::attach`, which only passes the gradient on
+//! to the input (dx = dy * W). Quantized weights are dequantized on the fly in
+//! the backward pass.
 
 use std::sync::Arc;
 
@@ -64,17 +60,20 @@ impl FrozenWeight {
         }
     }
 
-    /// `x · Wᵀ`, no autograd.
+    /// x * W^T without autograd.
     pub fn forward_t(&self, x: &Tensor) -> Result<Tensor> {
         match self {
             Self::Dense(w) => {
-                let w = if w.dtype() == x.dtype() { w.clone() } else { w.to_dtype(x.dtype())? };
+                let w = if w.dtype() == x.dtype() {
+                    w.clone()
+                } else {
+                    w.to_dtype(x.dtype())?
+                };
                 matmul_last(x, &w.t()?)
             }
             Self::Quant(q) => {
-                // On CPU, dequantize + f32 GEMM beats the quantized dot-product kernel once there are
-                // enough rows (training, prompt processing); token-by-token generation keeps the
-                // memory-light quantized kernel.
+                // on cpu dequantize + f32 matmul is faster for big batches,
+                // the quantized kernel is only worth it for a few rows
                 let rows = x.elem_count() / x.dim(candle_core::D::Minus1)?;
                 if q.device().is_cpu() && rows >= 32 {
                     let w = q.dequantize(&q.device())?.to_dtype(x.dtype())?;
@@ -86,7 +85,7 @@ impl FrozenWeight {
         }
     }
 
-    /// `g · W`, used for the input gradient.
+    /// g * W (gradient w.r.t. the input).
     pub fn backward_input(&self, g: &Tensor) -> Result<Tensor> {
         let w = match self {
             Self::Dense(w) => w.to_dtype(g.dtype())?,
@@ -96,7 +95,7 @@ impl FrozenWeight {
     }
 }
 
-/// `x (..., k) · w (k, n)` flattened into a single GEMM.
+/// x (..., k) @ w (k, n) as one 2D matmul.
 pub fn matmul_last(x: &Tensor, w: &Tensor) -> Result<Tensor> {
     let dims = x.dims();
     let k = dims[dims.len() - 1];
@@ -134,7 +133,7 @@ impl FrozenLinear {
     }
 }
 
-/// Low-rank adapter: `ΔW = B · A · (alpha / r)`.
+/// LoRA adapter, delta W = B * A * (alpha / r).
 #[derive(Clone, Debug)]
 pub struct Lora {
     /// (r, in)
@@ -147,13 +146,29 @@ pub struct Lora {
 }
 
 impl Lora {
-    /// PEFT initialisation: A ~ kaiming-uniform(a=√5) = U(-1/√in, 1/√in), B = 0.
-    pub fn new(in_f: usize, out_f: usize, rank: usize, alpha: f64, dropout: f32, device: &Device, rng: &mut Rng) -> Result<Self> {
+    /// Same init as PEFT: A uniform in +-1/sqrt(in), B zero.
+    pub fn new(
+        in_f: usize,
+        out_f: usize,
+        rank: usize,
+        alpha: f64,
+        dropout: f32,
+        device: &Device,
+        rng: &mut Rng,
+    ) -> Result<Self> {
         let bound = 1.0 / (in_f as f32).sqrt();
-        let a: Vec<f32> = (0..rank * in_f).map(|_| (rng.next_f32() * 2.0 - 1.0) * bound).collect();
+        let a: Vec<f32> = (0..rank * in_f)
+            .map(|_| (rng.next_f32() * 2.0 - 1.0) * bound)
+            .collect();
         let a = Var::from_tensor(&Tensor::from_vec(a, (rank, in_f), device)?)?;
         let b = Var::zeros((out_f, rank), DType::F32, device)?;
-        Ok(Self { a, b, rank, alpha, dropout })
+        Ok(Self {
+            a,
+            b,
+            rank,
+            alpha,
+            dropout,
+        })
     }
 
     pub fn from_tensors(a: Tensor, b: Tensor, alpha: f64) -> Result<Self> {
@@ -186,18 +201,23 @@ impl Lora {
         y.affine(self.scale(), 0.0)
     }
 
-    /// Dense ΔW (out, in) in f32.
+    /// Dense delta W (out, in) in f32.
     pub fn delta(&self) -> Result<Tensor> {
-        self.b.as_tensor().matmul(self.a.as_tensor())?.affine(self.scale(), 0.0)
+        self.b
+            .as_tensor()
+            .matmul(self.a.as_tensor())?
+            .affine(self.scale(), 0.0)
     }
 }
 
-/// Deterministic inverted dropout (the mask can be regenerated for gradient checkpointing).
+/// Dropout with a seeded mask so checkpointing can recompute the same one.
 fn dropout(x: &Tensor, p: f32, seed: u64) -> Result<Tensor> {
     let n = x.elem_count();
     let mut rng = Rng::new(seed);
     let keep = 1.0 / (1.0 - p);
-    let mask: Vec<f32> = (0..n).map(|_| if rng.next_f32() < p { 0.0 } else { keep }).collect();
+    let mask: Vec<f32> = (0..n)
+        .map(|_| if rng.next_f32() < p { 0.0 } else { keep })
+        .collect();
     let mask = Tensor::from_vec(mask, x.shape(), &Device::Cpu)?.to_device(x.device())?;
     x.mul(&mask)
 }
@@ -213,7 +233,10 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn inference() -> Self {
-        Self { grad: false, dropout_seed: None }
+        Self {
+            grad: false,
+            dropout_seed: None,
+        }
     }
 }
 
@@ -227,7 +250,11 @@ pub struct Linear {
 
 impl Linear {
     pub fn new(base: FrozenLinear, seed: u64) -> Self {
-        Self { base, lora: None, seed }
+        Self {
+            base,
+            lora: None,
+            seed,
+        }
     }
 
     pub fn in_features(&self) -> usize {
@@ -263,13 +290,21 @@ mod tests {
         let y = lin.forward(x.as_tensor())?;
         let loss = y.sqr()?.sum_all()?;
         let grads = loss.backward()?;
-        let gx = grads.get(x.as_tensor()).unwrap().flatten_all()?.to_vec1::<f32>()?;
+        let gx = grads
+            .get(x.as_tensor())
+            .unwrap()
+            .flatten_all()?
+            .to_vec1::<f32>()?;
 
         let x2 = Var::from_tensor(&Tensor::from_vec(xv, (2, 3, 4), &dev)?)?;
         let y2 = x2.as_tensor().broadcast_matmul(&w.t()?)?;
         let loss2 = y2.sqr()?.sum_all()?;
         let grads2 = loss2.backward()?;
-        let gx2 = grads2.get(x2.as_tensor()).unwrap().flatten_all()?.to_vec1::<f32>()?;
+        let gx2 = grads2
+            .get(x2.as_tensor())
+            .unwrap()
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         for (a, b) in gx.iter().zip(gx2.iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }

@@ -1,196 +1,161 @@
 # LLM Fine-Tuning in Rust
 
-Fine-tune open large language models on **your own documents and Q&A data** from a simple web page.
-Written from scratch in Rust: tokenizer, transformer, LoRA training loop, data readers, GGUF writer and web UI.
+A small web app for fine-tuning open LLMs on your own documents and Q&A data, written in Rust.
+It trains LoRA adapters on top of a frozen model, on the CPU or a GPU.
 
-- **Models:** load **GGUF** files (the llama.cpp / Ollama / LM Studio format) or **Hugging Face** folders (`config.json` + `*.safetensors`).
-- **Data:** drop in **PDF, Word (.docx), Excel (.xlsx), CSV/TSV, XML, JSON/JSONL**, OpenDocument (.odt), HTML, Markdown or plain text.
-- **Hardware:** choose **CPU** or **GPU** (NVIDIA CUDA or Apple Metal) with one click.
-- **Training:** LoRA, and QLoRA when the GGUF model is quantized (the base weights stay 4/8-bit in memory).
-- **Results:** a LoRA adapter (llama.cpp GGUF and Hugging Face PEFT formats) and/or a **merged model** as GGUF (f16, q8_0, q4_k, …) or safetensors.
-- **Test** your model in a chat playground before and after training.
+What it can do:
+
+- Load GGUF models (the format used by llama.cpp, Ollama and LM Studio) or Hugging Face folders (`config.json` + `*.safetensors`).
+- Read training data from PDF, Word (.docx), Excel (.xlsx), CSV/TSV, XML, JSON/JSONL, .odt, HTML, Markdown and plain text.
+- Train on CPU, NVIDIA (CUDA) or Apple (Metal). Quantized GGUF models stay quantized while training (QLoRA), so they need much less memory.
+- Save the result as a LoRA adapter (llama.cpp GGUF or PEFT safetensors) or as a merged model (GGUF with any common quantization, or safetensors).
+- Chat with the model in the browser before and after training.
 
 ![Training screen](docs/train.png)
 
----
+## Getting started
 
-## Quick start
+Install Rust from https://rustup.rs, then build:
 
-1. Install Rust: <https://rustup.rs>
-2. Build:
+```bash
+cargo build --release                    # CPU
+cargo build --release --features cuda    # NVIDIA GPU, needs the CUDA toolkit (nvcc)
+cargo build --release --features metal   # Apple Silicon GPU
+```
 
-   ```bash
-   cargo build --release                      # CPU (Windows, Linux, macOS)
-   cargo build --release --features cuda      # + NVIDIA GPU (needs the CUDA toolkit / nvcc)
-   cargo build --release --features metal     # + Apple Silicon GPU
-   ```
+Put a model in `workspace/models/` (or upload it from the page) and start the server:
 
-3. Put a model in `workspace/models/` (or upload it from the web page). Good first choices, all on Hugging Face:
+```bash
+./target/release/llm-finetune
+```
 
-   | Model | File | Size |
-   |---|---|---|
-   | Qwen2.5 0.5B Instruct | `Qwen/Qwen2.5-0.5B-Instruct-GGUF` → `qwen2.5-0.5b-instruct-q8_0.gguf` | 0.5 GB |
-   | SmolLM2 360M Instruct | `HuggingFaceTB/SmolLM2-360M-Instruct` (safetensors folder) | 0.7 GB |
-   | Llama 3.2 1B Instruct | `bartowski/Llama-3.2-1B-Instruct-GGUF` → `…-Q8_0.gguf` | 1.3 GB |
-   | Qwen3 1.7B | `Qwen/Qwen3-1.7B-GGUF` → `Qwen3-1.7B-Q8_0.gguf` | 1.8 GB |
+Then open http://127.0.0.1:7860.
 
-   Models you already downloaded with **Ollama** work too: they are GGUF files in `~/.ollama/models/blobs/` (the largest `sha256-…` file of a model).
+Some small models that are good for a first try (all on Hugging Face):
 
-4. Start the app and open <http://127.0.0.1:7860>:
+- `Qwen/Qwen2.5-0.5B-Instruct-GGUF`, file `qwen2.5-0.5b-instruct-q8_0.gguf` (0.5 GB)
+- `HuggingFaceTB/SmolLM2-360M-Instruct` (safetensors folder, 0.7 GB)
+- `bartowski/Llama-3.2-1B-Instruct-GGUF`, the Q8_0 file (1.3 GB)
+- `Qwen/Qwen3-1.7B-GGUF`, the Q8_0 file (1.8 GB)
 
-   ```bash
-   ./target/release/llm-finetune
-   ```
+Models downloaded with Ollama also work, they are plain GGUF files in `~/.ollama/models/blobs/` (the biggest `sha256-...` file of the model).
 
-## Using the web UI
+## Using the UI
 
-| Step | What you do |
-|---|---|
-| **1 · Model & device** | Pick a model, choose **Auto / CPU / NVIDIA GPU / Apple GPU**, choose how base weights are kept in memory, press **Load model**. |
-| **2 · Data** | Drag & drop files. Each file shows what was found (texts or Q&A pairs). For tables you can choose which columns are the *prompt* and the *answer*. **Preview** shows exactly what the model will see, with the trained part highlighted. |
-| **3 · Train** | Pick a preset (*Quick test*, *Balanced*, *Thorough*) or set epochs, learning rate, LoRA rank, etc. Press **Start training** and watch the loss curve, speed and remaining time. **Stop & save** keeps the work done so far. |
-| **4 · Test** | Chat with the model. The adapter is active right after training, so you can compare answers before and after. |
-| **5 · Export** | Download the adapter, or export a **merged** model as GGUF (choose a quantization) or safetensors. |
+The page has five tabs:
+
+1. **Model & device**: pick a model, choose Auto / CPU / NVIDIA / Apple GPU and how the base weights are kept in memory, then load it.
+2. **Data**: drag files in. Each file shows what was found (texts or Q&A pairs). For tables you can choose which columns are the prompt and the answer, and "Preview" shows the formatted example with the trained part highlighted.
+3. **Train**: pick a preset or set epochs, learning rate, LoRA rank etc. You get a live loss chart, speed and time left. "Stop & save" keeps what was trained so far.
+4. **Test**: chat with the model. The adapter is used right after training.
+5. **Export**: save or load adapters, export a merged model, download files.
 
 ![Data screen](docs/data.png)
 
-Everything is stored under `workspace/` (`models/`, `outputs/run-…/`).
-Run `llm-finetune serve --help` for host, port and folder options. The server listens on `127.0.0.1` only, unless you pass `--host 0.0.0.0`.
+Everything goes into `workspace/` (`models/` and `outputs/run-<date>/`). See `llm-finetune serve --help` for the port and folders. By default the server only listens on 127.0.0.1.
 
-## How your files are used
+## Training data
 
-| File | Becomes |
-|---|---|
-| PDF, Word `.docx`, `.odt`, `.txt`, `.md`, `.html` | **Plain text.** The model learns the content (continued pre-training). Text is cleaned, joined and cut into pieces of *max tokens per example*. |
-| CSV / TSV / Excel / XML / JSON with columns like `question`+`answer`, `instruction`+`input`+`output`, `prompt`+`response` | **Q&A examples.** They are wrapped in the model's chat format, and only the answers are trained (the prompt is context). You can change the column mapping in the UI. |
-| JSON / JSONL with `messages` (OpenAI) or `conversations` (ShareGPT) | **Multi-turn conversations** (system prompts included). |
-| Any other table | Plain text, one example per row (`column: value` lines). |
+- PDF, Word, ODT, TXT, Markdown and HTML are used as plain text, so the model learns the content. The text is joined and cut into chunks of "max tokens per example".
+- CSV, TSV, Excel, XML and JSON with columns like `question`/`answer`, `instruction`/`input`/`output` or `prompt`/`response` become chat examples. They are put in the model's chat format and only the answer is trained. The columns can be changed in the UI.
+- JSON/JSONL with `messages` (OpenAI style) or `conversations` (ShareGPT) are used as multi-turn chats.
+- Other tables are used as text, one row per example.
 
-Old binary `.doc` files and scanned PDFs (images without text) are not supported: save as `.docx` / run OCR first.
-Example files for every format are in [`examples/data`](examples/data).
+Old `.doc` files and scanned PDFs without a text layer don't work, save as `.docx` or run OCR first.
+There is an example file for each format in `examples/data`.
 
 ## Command line
 
-The same engine is available without the browser:
-
 ```bash
-# fine-tune
+# train
 llm-finetune train --model qwen2.5-0.5b-instruct-q8_0.gguf \
     --data examples/data/faq.csv examples/data/manual.pdf \
-    --epochs 3 --lr 2e-4 --rank 16 --device auto --output out/my-run \
-    --merge-gguf q8_0            # optional: also write out/my-run/merged.gguf
+    --epochs 3 --lr 2e-4 --rank 16 --output out/my-run \
+    --merge-gguf q8_0        # optional, also writes out/my-run/merged.gguf
 
-# chat with the result
+# try it
 llm-finetune generate --model qwen2.5-0.5b-instruct-q8_0.gguf --adapter out/my-run \
     --prompt "What are your opening hours?"
 
-# merge an adapter later
+# merge later
 llm-finetune merge --model base.gguf --adapter out/my-run --output merged-q4.gguf --quant q4_k
 
-llm-finetune info --model base.gguf          # architecture, tokenizer, chat format
+# model info
+llm-finetune info --model base.gguf
 ```
 
-`llm-finetune train --help` lists every option. `--config file.json` accepts the same settings as the UI (see `GET /api/train/defaults`).
+`--help` on each command lists all options. `train --config file.json` takes the same settings as the UI.
 
 ## Supported models
 
-| Family | GGUF `general.architecture` | Hugging Face `model_type` |
-|---|---|---|
-| Llama 2, Llama 3 / 3.1 / 3.2, TinyLlama, SmolLM 1/2, Mistral 7B and other Llama-architecture fine-tunes | `llama` | `llama`, `mistral` |
-| Qwen 2, Qwen 2.5 (incl. Coder / Math) | `qwen2` | `qwen2` |
-| Qwen 3 (dense) | `qwen3` | `qwen3` |
+- Llama architecture: Llama 2, Llama 3.x, TinyLlama, SmolLM, Mistral 7B and fine-tunes of these
+- Qwen 2 / 2.5
+- Qwen 3 (dense)
 
-GGUF weight types: F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K–Q6_K (the I-quants `IQ*` are not supported).
-Tokenizers: SentencePiece (Llama 2 style) and byte-level BPE with all common pre-tokenizers (Llama 3, Qwen 2/3.5, GPT-2, SmolLM/StarCoder, Phi-3, DeepSeek, Falcon, …).
-Chat formats are read from the model (its Jinja template). Built-ins: ChatML, Llama 3, Llama 2, Mistral, Zephyr, Phi-3, Alpaca, plain.
+GGUF types F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and Q2_K to Q6_K are supported (not the IQ types).
+The chat format is taken from the model's own template when it can be rendered, otherwise one of the built-in formats is used (ChatML, Llama 3, Llama 2, Mistral, Zephyr, Phi-3, Alpaca, plain).
 
-## Hardware and memory
+## Memory and speed
 
-| Setting | What it means |
-|---|---|
-| **Device** | *Auto* uses a GPU when one is built in and present, else the CPU. GPU builds need `--features cuda` or `--features metal`. |
-| **Base weights in memory** | *Keep as in file*: a Q4/Q8 GGUF stays quantized (QLoRA, least memory). *f32*: fastest on CPU, 4 bytes per parameter. *f16/bf16*: half that. *q8_0 / q4_k*: quantize a safetensors model when it is loaded. |
-| **Gradient checkpointing** (Advanced, on by default) | Recomputes one layer at a time during the backward pass, which uses much less memory and is a little slower. |
+"Base weights in memory" on the first tab:
 
-Measured on a 4-core cloud VM (Xeon, AVX-512) with a Qwen2.5-0.5B-sized model, 256 tokens per step:
+- keep as in file: a quantized GGUF stays quantized, uses the least memory
+- f32: fastest on CPU, 4 bytes per parameter
+- f16 / bf16: half of that
+- q8_0 / q4_k: quantize a safetensors model while loading
 
-| Base weights | Speed | Peak RAM (with checkpointing) |
-|---|---|---|
-| f32 | 25–32 tokens/s | 2.3 GB |
-| q8_0 / q4_0 (QLoRA) | ~20 tokens/s | 1.9 GB |
+Gradient checkpointing (under Advanced, on by default) saves a lot of memory for a bit of speed.
 
-A desktop with more cores is proportionally faster, and a GPU much faster. Rough guide: 1,000 Q&A pairs of ~100 tokens is ~100k tokens per epoch, about an hour per epoch for a 0.5B model on 4 CPU cores.
-The build uses `-C target-cpu=native` (see `.cargo/config.toml`), so the binary is tuned for the computer that compiled it (AVX2/AVX-512 or NEON). Copy it only to machines with the same or a newer CPU.
+On a 4-core cloud VM with a 0.5B Qwen-sized model I get about 25-32 tokens/s with f32 weights (2.3 GB RAM) and about 20 tokens/s with q8_0/q4_0 (1.9 GB). 1000 Q&A pairs of ~100 tokens is roughly an hour per epoch there. More cores or a GPU are a lot faster.
 
-## Using the results
+The release build uses `target-cpu=native` (`.cargo/config.toml`), so the binary is built for the CPU of the machine that compiled it.
 
-Each training run writes to `workspace/outputs/run-<date>/`:
+## Using the output
 
-| File | Use it with |
-|---|---|
-| `adapter.gguf` | llama.cpp: `llama-cli -m base.gguf --lora adapter.gguf` · llama-server (`--lora`) · Ollama (`ADAPTER ./adapter.gguf` in a Modelfile, with `FROM` the same base GGUF) |
-| `adapter_model.safetensors` + `adapter_config.json` | Hugging Face PEFT: `PeftModel.from_pretrained(base_model, "run-dir")` |
-| `training_log.json` | Settings and the loss of every step |
-| merged `.gguf` (Export tab or `--merge-gguf`) | One self-contained model: Ollama `FROM ./merged.gguf`, LM Studio, llama.cpp, Jan, GPT4All, … |
+A training run writes to `workspace/outputs/run-<date>/`:
 
-Adapters always match the base model they were trained on. Merged GGUF files keep the base model's tokenizer and chat template.
+- `adapter.gguf`: for llama.cpp (`llama-cli -m base.gguf --lora adapter.gguf`, also llama-server) or Ollama (`ADAPTER ./adapter.gguf` in a Modelfile, with `FROM` the same base model)
+- `adapter_model.safetensors` + `adapter_config.json`: Hugging Face PEFT (`PeftModel.from_pretrained(model, "run-dir")`)
+- `training_log.json`: settings and loss per step
 
-## How it works
+A merged `.gguf` from the Export tab is a normal model file that works in Ollama (`FROM ./merged.gguf`), LM Studio, llama.cpp etc.
+
+## Code layout
 
 ```
 src/
-├── tokenizer.rs     SentencePiece + byte-level BPE, read from GGUF metadata or tokenizer.json
-├── model/
-│   ├── mod.rs       Llama/Qwen transformer: RMSNorm, RoPE (both layouts), GQA attention, SwiGLU, KV cache
-│   ├── load.rs      GGUF and safetensors loaders, optional quantize-on-load
-│   ├── linear.rs    frozen (dense or quantized) weights + LoRA adapters
-│   └── ops.rs       fused ops with hand-written backward passes, fused cross-entropy
-├── data/            PDF / Word / Excel / CSV / XML / JSON / HTML readers, column mapping, sample building
-├── chat.rs          chat templates (Jinja via minijinja + built-ins) and answer-only loss masks
-├── train.rs         training loop: AdamW, warm-up + cosine/linear schedule, clipping, accumulation,
-│                    gradient checkpointing, evaluation, checkpoints
-├── export.rs        PEFT + GGUF adapters, merged GGUF / safetensors
-├── gguf_writer.rs   streaming GGUF v3 writer
-├── generate.rs      sampling (temperature, top-k, top-p, repetition penalty)
-├── server.rs        JSON API + embedded single-page UI (src/ui/index.html)
-└── main.rs          command line
+  tokenizer.rs    SentencePiece and byte-level BPE, from GGUF or tokenizer.json
+  model/          transformer, GGUF/safetensors loading, LoRA layers, fused ops
+  data/           file readers and sample building
+  chat.rs         chat templates (minijinja) and answer masks
+  train.rs        training loop
+  export.rs       adapters and merged models
+  gguf_writer.rs  GGUF writer
+  generate.rs     sampling
+  server.rs       HTTP API, the page is src/ui/index.html
+  main.rs         CLI
 ```
 
-Tensors, autograd and the CPU/CUDA/Metal kernels come from [candle](https://github.com/huggingface/candle). The rest is implemented here. Some details:
+Tensors and the CPU/CUDA/Metal kernels come from [candle](https://github.com/huggingface/candle).
 
-- **Frozen weights never get gradients.** Each projection runs outside autograd and is re-attached with a custom op whose backward pass only computes `dL/dx = dL/dy · W`. For quantized weights `W` is dequantized on the fly, so a 4-bit model stays 4-bit in memory (QLoRA).
-- **Fused ops.** RMSNorm, RoPE and softmax use candle's fused kernels forward and closed-form gradients backward.
-- **The vocabulary projection** (the largest matrix, e.g. 152k × 896) runs in chunks with a fused, multi-threaded cross-entropy, so the full logits matrix never exists.
-- **Llama GGUF files store Q/K rows permuted.** The model uses the matching RoPE layout. Adapters are converted between the llama.cpp and Hugging Face layouts on export and import.
-
-## Verification
+## Tests
 
 ```bash
 cargo test --release
 ```
 
-- Unit tests for every data reader, the tokenizers, sampling, the fused ops (against autograd) and the GGUF permutations.
-- `tests/gradients.rs`: LoRA gradients vs **finite differences** (three model variants), gradient checkpointing vs the full graph (with dropout), and QLoRA vs dense gradients.
-- `tests/training.rs`: CSV + text → training (the loss must drop) → saved PEFT and GGUF adapters → reload gives identical outputs.
-- `tests/llama_cpp_vocab.rs`: set `LLAMA_VOCAB_DIR=<llama.cpp>/models` to compare against llama.cpp's reference tokenizations.
-  All 14 supported vocabularies match exactly (Llama 2 SPM, Llama 3, Qwen2, Qwen3.5, GPT-2, Phi-3, StarCoder, Refact, Falcon, MPT, Command-R, DeepSeek Coder/LLM, …).
-  The same test renders the 74 real chat templates in llama.cpp's `models/templates`: 70 work with the model's own Jinja and mark exactly the answers for training. The other 4 need tool or "thinking" fields and fall back to a built-in format.
+There are unit tests for the readers, tokenizer, ops and export code, a gradient check against finite differences, and an end-to-end test that trains on a CSV and reloads the saved adapters.
 
-These were also checked against llama.cpp itself while developing (`examples/dump_logits.rs`):
-
-- Logits agree with an independent float64 reference to ~2·10⁻⁶ for Llama, Qwen2 and Qwen3, from both GGUF and safetensors.
-- Adapters trained here give the same logits in llama.cpp (`--lora`) to ~10⁻⁶.
-- Merged GGUF files load in llama.cpp and tokenize identically.
-
-`examples/bench_train.rs` measures training speed for real-world model shapes.
+If you have a llama.cpp checkout, `LLAMA_VOCAB_DIR=<llama.cpp>/models cargo test --release --test llama_cpp_vocab` compares the tokenizer with llama.cpp's reference outputs and renders its collection of real chat templates.
+`examples/dump_logits.rs` and `examples/bench_train.rs` are small tools for comparing outputs with llama.cpp and measuring speed.
 
 ## Limitations
 
-- Dense decoder models of the Llama / Qwen families only (no Gemma, Phi, Mixture-of-Experts or vision models yet).
-- One device per run (no multi-GPU).
-- The CUDA and Metal backends come from candle and are enabled with cargo features. The test suite above ran on CPU.
-- YaRN / dynamic RoPE scaling is ignored, which is fine for training sequences inside the original context length.
+- Only Llama and Qwen style dense models for now (no Gemma, Phi, MoE or vision models).
+- One device per run.
+- I have only tested on CPU so far. CUDA and Metal come from candle and should work, but haven't been tried yet.
+- YaRN / dynamic RoPE scaling is ignored, which is fine as long as training sequences fit in the original context.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT

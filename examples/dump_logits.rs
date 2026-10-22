@@ -12,11 +12,17 @@ fn main() -> Result<()> {
     if args.len() < 4 {
         anyhow::bail!("usage: dump_logits <model> <out.bin> <id,id,...> [adapter] [precision]");
     }
-    let ids: Vec<u32> = args[3].split(',').map(|s| s.trim().parse().unwrap()).collect();
+    let ids: Vec<u32> = args[3]
+        .split(',')
+        .map(|s| s.trim().parse().unwrap())
+        .collect();
     let precision = BasePrecision::parse(args.get(5).map(|s| s.as_str()).unwrap_or("auto"))?;
     let (mut model, _tok) = load_model(args[1].as_ref(), &Device::Cpu, precision, &|_| {})?;
     if let Some(a) = args.get(4).filter(|s| !s.is_empty() && *s != "-") {
-        eprintln!("{}", llm_finetune::export::load_adapter(&mut model, a.as_ref())?);
+        eprintln!(
+            "{}",
+            llm_finetune::export::load_adapter(&mut model, a.as_ref())?
+        );
     }
     let input = Tensor::new(ids.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
     let logits = model.forward(&input, &Ctx::inference())?.squeeze(0)?;
@@ -34,7 +40,15 @@ fn main() -> Result<()> {
     }
     let last: Vec<f32> = last.unwrap().to_vec1()?;
     let full_last = &flat[flat.len() - last.len()..];
-    let diff = last.iter().zip(full_last).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-    eprintln!("wrote {} x {} logits; kv-cache max diff {diff:.2e}", ids.len(), last.len());
+    let diff = last
+        .iter()
+        .zip(full_last)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    eprintln!(
+        "wrote {} x {} logits; kv-cache max diff {diff:.2e}",
+        ids.len(),
+        last.len()
+    );
     Ok(())
 }

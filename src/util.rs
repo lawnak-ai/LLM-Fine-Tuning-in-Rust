@@ -1,4 +1,4 @@
-//! Small helpers shared across the crate: a seedable PRNG, formatting, paths.
+//! Small helpers: PRNG, formatting, paths.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +18,9 @@ impl Rng {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^ (z >> 31)
         };
-        Self { s: [next(), next(), next(), next()] }
+        Self {
+            s: [next(), next(), next(), next()],
+        }
     }
 
     pub fn next_u64(&mut self) -> u64 {
@@ -122,7 +124,12 @@ pub fn timestamp_slug() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, (rem / 60) % 60, rem % 60)
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rem / 3600,
+        (rem / 60) % 60,
+        rem % 60
+    )
 }
 
 /// Replace characters that are awkward in file names.
@@ -133,7 +140,13 @@ pub fn sanitize_file_name(name: &str) -> String {
         .unwrap_or_else(|| "file".to_string());
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let cleaned = cleaned.trim_start_matches('.').to_string();
     if cleaned.is_empty() {
