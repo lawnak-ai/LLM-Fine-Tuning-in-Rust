@@ -1,0 +1,5 @@
+# Use every instruction the build machine supports (AVX2/FMA/F16C on x86, NEON/dotprod on ARM).
+# The quantized CPU kernels are selected at compile time, so this is a large speed-up.
+# Remove this if you need a binary that runs on older CPUs than the one you build on.
+[build]
+rustflags = ["-C", "target-cpu=native"]

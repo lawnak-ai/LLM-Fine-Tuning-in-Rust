@@ -1,0 +1,4 @@
+/target
+/workspace
+*.gguf.part
+*.safetensors.part
