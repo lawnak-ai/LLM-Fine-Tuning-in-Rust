@@ -425,7 +425,7 @@ pub fn load_hf(dir: &Path, device: &Device, precision: BasePrecision, progress: 
     // SAFETY: the files are memory mapped read-only and not modified while loaded.
     let st = unsafe { candle_core::safetensors::MmapedSafetensors::multi(&files)? };
     let names: std::collections::HashSet<String> = st.tensors().into_iter().map(|(n, _)| n).collect();
-    let load = |name: &str| -> Result<Tensor> { Ok(st.load(name, &Device::Cpu).with_context(|| format!("missing tensor {name}"))?) };
+    let load = |name: &str| -> Result<Tensor> { st.load(name, &Device::Cpu).with_context(|| format!("missing tensor {name}")) };
     let small = |name: &str| -> Result<Tensor> { Ok(load(name)?.to_dtype(DType::F32)?.to_device(device)?) };
 
     let embd = load("model.embed_tokens.weight")?;

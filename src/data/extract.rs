@@ -308,8 +308,9 @@ fn make_records(header: Vec<String>, mut rows: Vec<Vec<String>>) -> Extracted {
 fn csv_records(text: &str, delim: Option<u8>) -> Result<Extracted> {
     let delim = delim.unwrap_or_else(|| {
         let first = text.lines().next().unwrap_or("");
-        [b',', b';', b'\t', b'|']
-            .into_iter()
+        b",;\t|"
+            .iter()
+            .copied()
             .max_by_key(|d| first.bytes().filter(|b| b == d).count())
             .unwrap_or(b',')
     });
