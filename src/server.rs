@@ -297,6 +297,7 @@ fn model_info(model: &Model, tok: &Tokenizer, path: &FsPath, precision: &str) ->
         "precision": precision,
         "tokenizer": tok.info(),
         "chat_template": fmt.name(),
+        "chat_template_error": fmt.jinja_error,
         "adapter": model.lora.as_ref().map(|l| json!({"rank": l.rank, "alpha": l.alpha, "targets": l.targets, "params": model.trainable_params()})),
     })
 }

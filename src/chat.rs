@@ -1,7 +1,7 @@
 //! Chat templates: turn conversations into text, and mark which characters are
 //! the assistant's answers (the only part the model is trained to produce).
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::tokenizer::Tokenizer;
@@ -67,6 +67,8 @@ pub struct ChatFormatter {
     eos_text: String,
     /// Why the model's own template could not be used (if it could not).
     pub jinja_error: Option<String>,
+    /// Texts of the end-of-generation tokens (`<|im_end|>`, `<|eot_id|>`, `</s>`, ...).
+    eog_texts: Vec<String>,
 }
 
 fn detect_builtin(tpl: Option<&str>, tok: &Tokenizer) -> TemplateKind {
@@ -93,6 +95,14 @@ fn detect_builtin(tpl: Option<&str>, tok: &Tokenizer) -> TemplateKind {
     }
 }
 
+/// Remove Hugging Face's `{% generation %}` markers, which only exist for assistant masks.
+fn clean_template(t: &str) -> String {
+    match fancy_regex::Regex::new(r"\{%-?\s*(?:end)?generation\s*-?%\}") {
+        Ok(re) => re.replace_all(t, "").into_owned(),
+        Err(_) => t.to_string(),
+    }
+}
+
 const ALPACA_SYSTEM: &str =
     "Below is an instruction that describes a task. Write a response that appropriately completes the request.";
 
@@ -101,11 +111,12 @@ impl ChatFormatter {
         let bos_text = tok.bos.map(|b| tok.token_text(b).to_string()).unwrap_or_default();
         let eos_text = tok.eos.map(|b| tok.token_text(b).to_string()).unwrap_or_default();
         let jinja = tok.chat_template.clone();
-        let mut f = Self { kind, jinja: None, bos_text, eos_text, jinja_error: None };
+        let eog_texts = tok.end_of_generation_ids().iter().map(|&i| tok.token_text(i).to_string()).filter(|t| !t.is_empty()).collect();
+        let mut f = Self { kind, jinja: None, bos_text, eos_text, jinja_error: None, eog_texts };
         match kind {
             TemplateKind::Auto | TemplateKind::Model => {
                 if let Some(t) = jinja {
-                    f.jinja = Some(t);
+                    f.jinja = Some(clean_template(&t));
                     f.kind = TemplateKind::Model;
                     match f.probe() {
                         Ok(()) => return f,
@@ -306,31 +317,82 @@ impl ChatFormatter {
         t.render(ctx).map_err(|e| anyhow!("chat template error: {e}"))
     }
 
-    fn render_jinja(&self, tpl: &str, conv: &Conversation, add_generation_prompt: bool) -> Result<Rendered> {
-        let mut msgs = vec![];
-        if let Some(sys) = conv.system.as_deref().filter(|s| !s.trim().is_empty()) {
-            msgs.push(serde_json::json!({"role": "system", "content": sys}));
+    /// Length of the end-of-turn marker that follows an answer in `rest`.
+    fn end_marker_len(&self, suffix: &str, rest: &str) -> usize {
+        let mut cands: Vec<(usize, &str)> = self
+            .eog_texts
+            .iter()
+            .filter_map(|t| suffix.find(t.as_str()).map(|p| (p, &suffix[..p + t.len()])))
+            .collect();
+        cands.sort();
+        let first_line = suffix.split('\n').next().unwrap_or("").trim_end();
+        let extra = [first_line, suffix];
+        for c in cands.iter().map(|c| c.1).chain(extra) {
+            if !c.is_empty() && rest.starts_with(c) {
+                return c.len();
+            }
         }
-        let mut spans = vec![];
-        for (user, asst) in &conv.turns {
+        // Earlier turns may end with a different token than the last one (e.g. <|end|> vs <|return|>).
+        self.eog_texts.iter().filter(|t| rest.starts_with(t.as_str())).map(|t| t.len()).max().unwrap_or(0)
+    }
+
+    fn render_jinja(&self, tpl: &str, conv: &Conversation, add_generation_prompt: bool) -> Result<Rendered> {
+        let has_system = conv.system.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        match self.render_jinja_with(tpl, conv, add_generation_prompt, false) {
+            Ok(r) => Ok(r),
+            // Some templates (Gemma, ...) reject a system role: fold it into the first user turn.
+            Err(e) if has_system => self.render_jinja_with(tpl, conv, add_generation_prompt, true).map_err(|_| e),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn render_jinja_with(&self, tpl: &str, conv: &Conversation, add_generation_prompt: bool, merge_system: bool) -> Result<Rendered> {
+        let sys = conv.system.as_deref().filter(|s| !s.trim().is_empty());
+        let mut msgs = vec![];
+        if let (Some(s), false) = (sys, merge_system) {
+            msgs.push(serde_json::json!({"role": "system", "content": s}));
+        }
+        for (i, (user, asst)) in conv.turns.iter().enumerate() {
+            let user = match (sys, merge_system && i == 0) {
+                (Some(s), true) => format!("{s}\n\n{user}"),
+                _ => user.clone(),
+            };
             msgs.push(serde_json::json!({"role": "user", "content": user}));
             if let Some(a) = asst {
-                let prefix = self.jinja_text(tpl, &msgs, true)?;
                 msgs.push(serde_json::json!({"role": "assistant", "content": a}));
-                let full = self.jinja_text(tpl, &msgs, false)?;
-                if !full.starts_with(&prefix) {
-                    return Err(anyhow!("chat template does not render prompts as prefixes"));
-                }
-                // The answer ends at the end-of-turn marker: drop trailing whitespace after it.
-                let end = full.trim_end().len();
-                spans.push((prefix.len(), end.max(prefix.len())));
             }
         }
         let gen = add_generation_prompt && conv.turns.last().map(|t| t.1.is_none()).unwrap_or(false);
         let text = self.jinja_text(tpl, &msgs, gen)?;
-        for (s, e) in &spans {
-            if *e > text.len() || *s > *e {
-                return Err(anyhow!("chat template rendering is not incremental"));
+
+        // Find every answer in the final text (templates may render earlier turns differently
+        // from the last one, so offsets from partial renders cannot be reused).
+        let mut spans = vec![];
+        let mut from = 0;
+        for (i, m) in msgs.iter().enumerate() {
+            let content = m["content"].as_str().unwrap_or("").trim();
+            if content.is_empty() {
+                continue;
+            }
+            match m["role"].as_str() {
+                Some("user") => {
+                    if let Some(p) = text[from..].find(content) {
+                        from += p + content.len();
+                    }
+                }
+                Some("assistant") => {
+                    let start = from + text[from..].find(content).context("the chat template changes the answer text")?;
+                    let mut end = start + content.len();
+                    // The end-of-turn marker is whatever follows the answer when it is the last
+                    // message, cut after the first end-of-generation token (templates may append
+                    // more, e.g. tool instructions).
+                    let partial = self.jinja_text(tpl, &msgs[..=i], false)?;
+                    let suffix = partial.rfind(content).map(|q| partial[q + content.len()..].trim_end().to_string()).unwrap_or_default();
+                    end += self.end_marker_len(&suffix, &text[end..]);
+                    spans.push((start, end));
+                    from = end;
+                }
+                _ => {}
             }
         }
         Ok(Rendered { text, train_spans: spans })
@@ -365,4 +427,71 @@ pub fn tokenize_rendered(tok: &Tokenizer, fmt: &ChatFormatter, r: &Rendered, tra
 
 fn common_prefix(a: &[u32], b: &[u32]) -> usize {
     a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fmt(kind: TemplateKind, jinja: Option<&str>, eog: &[&str]) -> ChatFormatter {
+        ChatFormatter {
+            kind,
+            jinja: jinja.map(clean_template),
+            bos_text: String::new(),
+            eos_text: "</s>".into(),
+            jinja_error: None,
+            eog_texts: eog.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn trained(r: &Rendered) -> Vec<&str> {
+        r.train_spans.iter().map(|&(s, e)| &r.text[s..e]).collect()
+    }
+
+    fn two_turns() -> Conversation {
+        Conversation {
+            system: Some("Be brief.".into()),
+            turns: vec![("Hi".into(), Some("Hello!".into())), ("2+2?".into(), Some("4".into()))],
+        }
+    }
+
+    #[test]
+    fn builtin_chatml_spans() {
+        let r = fmt(TemplateKind::ChatMl, None, &[]).render(&two_turns(), false).unwrap();
+        assert_eq!(trained(&r), vec!["Hello!<|im_end|>", "4<|im_end|>"]);
+        assert!(r.text.starts_with("<|im_start|>system\nBe brief.<|im_end|>\n"));
+        let p = fmt(TemplateKind::ChatMl, None, &[]).render(&Conversation::single(None, "Q".into(), None), true).unwrap();
+        assert!(p.text.ends_with("<|im_start|>assistant\n"));
+        assert!(p.train_spans.is_empty());
+    }
+
+    #[test]
+    fn jinja_spans_follow_the_final_text() {
+        // Like Qwen3: only the last assistant message gets an empty think block.
+        let tpl = "{% for m in messages %}<|im_start|>{{ m.role }}\n{% if m.role == 'assistant' and loop.last %}<think>\n\n</think>\n\n{% endif %}{% generation %}{{ m.content }}{% endgeneration %}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}";
+        let f = fmt(TemplateKind::Model, Some(tpl), &["<|im_end|>"]);
+        let r = f.render(&two_turns(), false).unwrap();
+        assert_eq!(trained(&r), vec!["Hello!<|im_end|>", "4<|im_end|>"]);
+    }
+
+    #[test]
+    fn system_role_is_merged_when_rejected() {
+        let tpl = "{% for m in messages %}{% if m.role == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}<start_of_turn>{{ m.role }}\n{{ m.content }}<end_of_turn>\n{% endfor %}";
+        let f = fmt(TemplateKind::Model, Some(tpl), &["<end_of_turn>"]);
+        let r = f.render(&two_turns(), false).unwrap();
+        assert!(r.text.contains("Be brief.\n\nHi"));
+        assert_eq!(trained(&r), vec!["Hello!<end_of_turn>", "4<end_of_turn>"]);
+    }
+
+    #[test]
+    fn end_marker_stops_at_end_of_generation_token() {
+        let f = fmt(TemplateKind::Model, None, &["<|END_OF_TURN_TOKEN|>", "<|end|>", "<|return|>"]);
+        let tool = "<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Write 'Action:'";
+        assert_eq!(f.end_marker_len(tool, tool), "<|END_OF_TURN_TOKEN|>".len());
+        // Earlier turns end with <|end|> although the last one ends with <|return|>.
+        assert_eq!(f.end_marker_len("<|return|>", "<|end|><|start|>user"), "<|end|>".len());
+        let g = fmt(TemplateKind::Model, None, &[]);
+        assert_eq!(g.end_marker_len("\n</assistant>", "\n</assistant>\n<user>"), "\n</assistant>".len());
+        assert_eq!(g.end_marker_len("<|return|>", "<|end|>"), 0);
+    }
 }

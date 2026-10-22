@@ -536,7 +536,7 @@ function renderModel(m) {
     ["Layers / hidden", `${m.layers} / ${m.hidden}`], ["Heads (KV)", `${m.heads} (${m.kv_heads}), head dim ${m.head_dim}`],
     ["Vocabulary", fmtBig(m.vocab)], ["Context", fmtBig(m.context) + " tokens"], ["Weights", esc(w)],
     ["Memory", m.memory], ["Device", esc(m.device)], ["Tokenizer", `${esc(t.kind)} (${esc(t.pre)})`],
-    ["Chat format", esc(m.chat_template)],
+    ["Chat format", esc(m.chat_template) + (m.chat_template_error ? ` <span class="hint" title="${esc(m.chat_template_error)}">(model's own template could not be used)</span>` : "")],
     ["Adapter", m.adapter ? `rank ${m.adapter.rank}, alpha ${m.adapter.alpha}, ${fmtBig(m.adapter.params)} params` : "none"],
     ["File", `<span class="mono">${esc(m.path)}</span>`],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
