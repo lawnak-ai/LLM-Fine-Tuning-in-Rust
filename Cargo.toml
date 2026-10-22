@@ -1,0 +1,51 @@
+[package]
+name = "llm-finetune"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "LLM fine-tuning (LoRA / QLoRA) written from scratch in Rust, with a web UI. Loads GGUF and safetensors models, ingests PDF/Word/CSV/XML/JSON/TXT data, trains on CPU or GPU."
+license = "MIT"
+readme = "README.md"
+default-run = "llm-finetune"
+
+[features]
+default = []
+# NVIDIA GPUs (requires the CUDA toolkit / nvcc at build time).
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+cudnn = ["cuda", "candle-core/cudnn"]
+# Apple GPUs.
+metal = ["candle-core/metal", "candle-nn/metal"]
+# Faster CPU math libraries.
+mkl = ["candle-core/mkl", "candle-nn/mkl"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+
+[dependencies]
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+half = "2.7"
+rayon = "1"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4.6", features = ["derive"] }
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "signal"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["io"] }
+fancy-regex = "0.19"
+unicode-normalization = "0.1"
+pdf-extract = "0.12"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+csv = "1.4"
+minijinja = { version = "3", features = ["serde", "json", "loop_controls"] }
+minijinja-contrib = { version = "3", features = ["pycompat"] }
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 16
+
+# Tensor math is unusably slow without optimisations, even in debug builds.
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Fine-Tuning Studio</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --border: #dde1e7; --text: #1b1f24; --muted: #5f6b7a;
+  --accent: #2563eb; --accent-2: #1d4ed8; --accent-soft: #e6eeff; --ok: #15803d; --ok-soft: #e3f5e9;
+  --warn: #b45309; --warn-soft: #fdf1e1; --err: #b91c1c; --err-soft: #fde7e7; --train: #fde68a; --code: #f3f4f6;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04); --radius: 12px;
+  --chart-1: #2563eb; --chart-2: #f59e0b; --chart-3: #10b981; --grid: #e5e7eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #1c222b; --border: #2b333e; --text: #e6edf3; --muted: #93a1b0;
+    --accent: #4f8cff; --accent-2: #6aa0ff; --accent-soft: #17264a; --ok: #3fb950; --ok-soft: #12261a;
+    --warn: #e3a341; --warn-soft: #2d2212; --err: #f87171; --err-soft: #2f1517; --train: #5c4a12; --code: #0b0f14;
+    --shadow: none; --chart-1: #6aa0ff; --chart-2: #f5b14b; --chart-3: #34d399; --grid: #2b333e;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --panel: #161b22; --panel-2: #1c222b; --border: #2b333e; --text: #e6edf3; --muted: #93a1b0;
+  --accent: #4f8cff; --accent-2: #6aa0ff; --accent-soft: #17264a; --ok: #3fb950; --ok-soft: #12261a;
+  --warn: #e3a341; --warn-soft: #2d2212; --err: #f87171; --err-soft: #2f1517; --train: #5c4a12; --code: #0b0f14;
+  --shadow: none; --chart-1: #6aa0ff; --chart-2: #f5b14b; --chart-3: #34d399; --grid: #2b333e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+a { color: var(--accent); }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+header.top { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--border); }
+.top-inner { max-width: 1240px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
+.brand svg { flex: none; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; color: var(--muted); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+.dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+nav.tabs { max-width: 1240px; margin: 0 auto; padding: 0 16px; display: flex; gap: 4px; overflow-x: auto; }
+nav.tabs button { border: 0; background: none; color: var(--muted); padding: 10px 14px; font: inherit; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+nav.tabs button .n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--panel-2); margin-right: 6px; font-size: 12px; }
+nav.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+nav.tabs button[aria-selected="true"] .n { background: var(--accent); color: #fff; }
+main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 60px; }
+section.page { display: none; } section.page.active { display: block; }
+.grid { display: grid; gap: 16px; }
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.cols-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); min-width: 0; }
+.card h2 { margin: 0 0 4px; font-size: 17px; }
+.card h3 { margin: 16px 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
+label.f { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+.hint { font-size: 12px; color: var(--muted); font-weight: 400; }
+input[type=text], input[type=number], select, textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+textarea { resize: vertical; min-height: 80px; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row > * { min-width: 0; }
+.row.end { justify-content: flex-end; }
+.f-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 14px; }
+button.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  padding: 8px 14px; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+button.btn:hover { background: var(--panel-2); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.primary:hover { background: var(--accent-2); }
+button.btn.danger { color: var(--err); }
+button.btn.small { padding: 4px 10px; font-size: 13px; }
+button.btn:disabled { opacity: .5; cursor: not-allowed; }
+.seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.seg label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--panel); }
+.seg label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.seg label.disabled { opacity: .55; cursor: not-allowed; }
+.seg input { margin-top: 4px; }
+.seg .t { font-weight: 600; } .seg .d { font-size: 12px; color: var(--muted); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 14px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-word; }
+.notice { padding: 10px 12px; border-radius: 8px; font-size: 14px; margin: 10px 0; border: 1px solid transparent; }
+.notice.info { background: var(--accent-soft); } .notice.ok { background: var(--ok-soft); color: var(--ok); }
+.notice.warn { background: var(--warn-soft); color: var(--warn); } .notice.err { background: var(--err-soft); color: var(--err); }
+.drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 26px; text-align: center; cursor: pointer; background: var(--panel-2); transition: .15s; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop .big { font-size: 16px; font-weight: 600; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+.badge.k { font-weight: 700; text-transform: uppercase; color: var(--accent); }
+.ds { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 10px; background: var(--panel); }
+.ds.off { opacity: .6; }
+.ds-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ds-name { font-weight: 600; word-break: break-all; }
+.ds-stats { color: var(--muted); font-size: 13px; }
+.preview { margin-top: 10px; font-size: 13px; }
+.preview .item { border-left: 3px solid var(--border); padding: 6px 10px; margin: 6px 0; background: var(--panel-2); border-radius: 0 6px 6px 0; white-space: pre-wrap; word-break: break-word; }
+.preview .lbl { font-weight: 700; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.sample { white-space: pre-wrap; word-break: break-word; background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; max-height: 320px; overflow: auto; }
+.sample mark { background: var(--train); color: inherit; border-radius: 3px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+.stat .l { font-size: 12px; color: var(--muted); } .stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.progress { height: 10px; background: var(--panel-2); border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.chart-wrap { position: relative; height: 280px; margin-top: 12px; }
+canvas#chart { width: 100%; height: 100%; display: block; }
+.legend { display: flex; gap: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; box-shadow: var(--shadow); display: none; white-space: nowrap; }
+.log { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 10px; height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.checks label { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+details.adv summary { cursor: pointer; font-weight: 600; margin-top: 14px; }
+.chat { display: flex; flex-direction: column; gap: 10px; min-height: 280px; max-height: 60vh; overflow: auto; padding: 4px; }
+.msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg .meta { display: block; font-size: 11px; opacity: .7; margin-top: 4px; }
+.empty { color: var(--muted); text-align: center; padding: 30px 10px; }
+.files { width: 100%; border-collapse: collapse; font-size: 14px; }
+.files td { padding: 6px 4px; border-top: 1px solid var(--border); vertical-align: middle; }
+.files td.path { word-break: break-all; }
+.spin { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: rot .8s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.toast { position: fixed; right: 16px; bottom: 16px; max-width: min(460px, calc(100vw - 32px)); z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+.toast div { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.15); font-size: 14px; }
+.toast div.err { border-left-color: var(--err); } .toast div.ok { border-left-color: var(--ok); }
+.muted { color: var(--muted); }
+.right { margin-left: auto; }
+.hidden { display: none !important; }
+pre.cmd { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+@media (max-width: 640px) { .msg { max-width: 95%; } .card { padding: 14px; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="6" fill="var(--accent)"/><path d="M7 15l3-6 3 4 2-3 2 5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      LLM Fine-Tuning Studio
+    </div>
+    <div class="chips" aria-live="polite">
+      <span class="chip" id="chip-device"><span class="dot"></span><span>device</span></span>
+      <span class="chip" id="chip-model"><span class="dot"></span><span>no model</span></span>
+      <span class="chip" id="chip-train"><span class="dot"></span><span>idle</span></span>
+      <button class="btn small" id="theme-btn" title="Switch light / dark theme" aria-label="Switch theme">◐</button>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="model" aria-selected="true"><span class="n">1</span>Model &amp; device</button>
+    <button role="tab" data-tab="data" aria-selected="false"><span class="n">2</span>Data</button>
+    <button role="tab" data-tab="train" aria-selected="false"><span class="n">3</span>Train</button>
+    <button role="tab" data-tab="test" aria-selected="false"><span class="n">4</span>Test</button>
+    <button role="tab" data-tab="export" aria-selected="false"><span class="n">5</span>Export</button>
+  </nav>
+</header>
+
+<main>
+<!-- ============================ MODEL ============================ -->
+<section class="page active" id="page-model">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Choose a model</h2>
+      <p class="sub">GGUF files (llama.cpp / Ollama / LM Studio format) or Hugging Face folders with <code>config.json</code> + <code>*.safetensors</code>. Supported families: Llama 2/3, Mistral, TinyLlama, SmolLM, Qwen 2 / 2.5 / 3.</p>
+      <label class="f" for="model-select">Models found in <span class="mono" id="models-dir">models/</span></label>
+      <div class="row">
+        <select id="model-select" style="flex:1"><option value="">— select —</option></select>
+        <button class="btn" id="models-refresh" title="Rescan the models folder">↻ Refresh</button>
+      </div>
+      <label class="f" for="model-path">…or a path on this computer</label>
+      <input type="text" id="model-path" placeholder="/path/to/model.gguf  or  /path/to/hf-model-folder" autocomplete="off">
+      <label class="f">…or upload a .gguf file <span class="hint">(copied into the models folder)</span></label>
+      <div class="row">
+        <input type="file" id="model-file" accept=".gguf">
+        <button class="btn" id="model-upload">Upload</button>
+      </div>
+      <div class="progress hidden" id="upload-progress" style="margin-top:8px"><div></div></div>
+
+      <h3>Device</h3>
+      <div class="seg" id="device-seg">
+        <label><input type="radio" name="device" value="auto" checked><span><span class="t">Auto</span><br><span class="d">GPU if available</span></span></label>
+        <label><input type="radio" name="device" value="cpu"><span><span class="t">CPU</span><br><span class="d" id="cpu-desc">all cores</span></span></label>
+        <label id="dev-cuda"><input type="radio" name="device" value="cuda"><span><span class="t">NVIDIA GPU</span><br><span class="d" id="cuda-desc">CUDA</span></span></label>
+        <label id="dev-metal"><input type="radio" name="device" value="metal"><span><span class="t">Apple GPU</span><br><span class="d" id="metal-desc">Metal</span></span></label>
+      </div>
+      <div class="f-grid">
+        <div><label class="f" for="gpu-index">GPU number</label><input type="number" id="gpu-index" value="0" min="0" max="15"></div>
+        <div>
+          <label class="f" for="precision">Base weights in memory</label>
+          <select id="precision">
+            <option value="auto">Keep as in file (QLoRA for quantized GGUF)</option>
+            <option value="f32">f32 — exact, most memory</option>
+            <option value="f16">f16 — half memory</option>
+            <option value="bf16">bf16</option>
+            <option value="q8_0">q8_0 — quantize on load (≈¼ memory)</option>
+            <option value="q4_k">q4_k — quantize on load (≈⅛ memory)</option>
+          </select>
+        </div>
+      </div>
+      <div class="row end" style="margin-top:14px">
+        <button class="btn danger" id="model-unload">Unload</button>
+        <button class="btn primary" id="model-load">Load model</button>
+      </div>
+      <div id="model-task" class="notice info hidden" role="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Loaded model</h2>
+      <div id="model-empty" class="empty">No model loaded yet.<br>Pick a GGUF file or a Hugging Face folder and press <b>Load model</b>.</div>
+      <dl class="kv hidden" id="model-info"></dl>
+      <h3>This computer</h3>
+      <dl class="kv" id="sys-info"></dl>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ DATA ============================ -->
+<section class="page" id="page-data">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Add training data</h2>
+      <p class="sub">Documents (PDF, Word, text) teach the model new knowledge. Tables and JSON with question/answer pairs teach it how to answer.</p>
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload data files">
+        <div class="big">Drop files here or click to choose</div>
+        <div class="muted">You can add many files at once</div>
+        <div class="badges">
+          <span class="badge k">pdf</span><span class="badge k">docx</span><span class="badge k">xlsx</span><span class="badge k">csv</span><span class="badge k">tsv</span>
+          <span class="badge k">xml</span><span class="badge k">json</span><span class="badge k">jsonl</span><span class="badge k">txt</span><span class="badge k">md</span><span class="badge k">html</span><span class="badge k">odt</span>
+        </div>
+        <input type="file" id="data-files" multiple class="hidden" accept=".pdf,.docx,.odt,.xlsx,.csv,.tsv,.xml,.json,.jsonl,.ndjson,.txt,.md,.markdown,.html,.htm,.log,.rst">
+      </div>
+      <div id="data-upload-status" class="hidden notice info" role="status"></div>
+      <details class="adv">
+        <summary>Paste text instead</summary>
+        <label class="f" for="paste-name">Name</label>
+        <input type="text" id="paste-name" placeholder="my notes">
+        <label class="f" for="paste-text">Text</label>
+        <textarea id="paste-text" rows="6" placeholder="Paste any text the model should learn…"></textarea>
+        <div class="row end" style="margin-top:8px"><button class="btn" id="paste-add">Add text</button></div>
+      </details>
+      <h3>How files are used</h3>
+      <ul class="muted" style="margin:0;padding-left:18px;font-size:14px">
+        <li><b>PDF, Word, ODT, TXT, Markdown, HTML</b>: plain text, the model learns to continue it.</li>
+        <li><b>CSV, TSV, Excel, XML, JSON</b>: columns like <i>question/answer</i>, <i>instruction/input/output</i> or <i>prompt/response</i> become chat examples. Other tables are used as text.</li>
+        <li><b>JSON/JSONL with <code>messages</code></b> (OpenAI / ShareGPT format) are used as conversations.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="row"><h2>Your datasets</h2><span class="right muted" id="data-total"></span></div>
+      <div id="data-list"><div class="empty">No data yet.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ TRAIN ============================ -->
+<section class="page" id="page-train">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Training settings</h2>
+      <p class="sub">LoRA trains a small adapter on top of the frozen model, so it fits on ordinary hardware.</p>
+      <div class="row">
+        <span class="muted" style="font-size:13px">Presets:</span>
+        <button class="btn small" data-preset="quick">Quick test</button>
+        <button class="btn small" data-preset="balanced">Balanced</button>
+        <button class="btn small" data-preset="thorough">Thorough</button>
+      </div>
+      <div class="f-grid">
+        <div><label class="f" for="t-epochs">Epochs</label><input type="number" id="t-epochs" min="0" step="1"></div>
+        <div><label class="f" for="t-max_steps">Max steps <span class="hint">0 = all epochs</span></label><input type="number" id="t-max_steps" min="0"></div>
+        <div><label class="f" for="t-learning_rate">Learning rate</label><input type="number" id="t-learning_rate" step="0.00001" min="0"></div>
+        <div><label class="f" for="t-max_seq_len">Max tokens per example</label><input type="number" id="t-max_seq_len" min="16" step="16"></div>
+        <div><label class="f" for="t-batch_size">Batch size</label><input type="number" id="t-batch_size" min="1"></div>
+        <div><label class="f" for="t-grad_accum">Gradient accumulation</label><input type="number" id="t-grad_accum" min="1"></div>
+        <div><label class="f" for="t-lora_rank">LoRA rank</label><input type="number" id="t-lora_rank" min="1"></div>
+        <div><label class="f" for="t-lora_alpha">LoRA alpha</label><input type="number" id="t-lora_alpha" min="1"></div>
+      </div>
+      <label class="f">Layers to adapt</label>
+      <div class="checks" id="t-targets">
+        <label><input type="checkbox" value="q">q</label><label><input type="checkbox" value="k">k</label>
+        <label><input type="checkbox" value="v">v</label><label><input type="checkbox" value="o">o</label>
+        <label><input type="checkbox" value="gate">gate</label><label><input type="checkbox" value="up">up</label>
+        <label><input type="checkbox" value="down">down</label>
+      </div>
+      <div class="f-grid">
+        <div>
+          <label class="f" for="t-chat_template">Chat format</label>
+          <select id="t-chat_template">
+            <option value="auto">Auto (model's own)</option><option value="chatml">ChatML (Qwen, SmolLM)</option>
+            <option value="llama3">Llama 3</option><option value="llama2">Llama 2</option><option value="mistral">Mistral</option>
+            <option value="zephyr">Zephyr (TinyLlama)</option><option value="phi3">Phi-3</option>
+            <option value="alpaca">Alpaca</option><option value="plain">Plain</option>
+          </select>
+        </div>
+        <div>
+          <label class="f" for="t-data_mode">Q&amp;A data</label>
+          <select id="t-data_mode"><option value="auto">as chat (learn answers)</option><option value="text">as plain text</option></select>
+        </div>
+      </div>
+      <label class="f" for="t-system_prompt">System prompt <span class="hint">(optional, added to chat examples)</span></label>
+      <input type="text" id="t-system_prompt" placeholder="You are a helpful assistant.">
+      <details class="adv">
+        <summary>Advanced</summary>
+        <div class="f-grid">
+          <div><label class="f" for="t-lora_dropout">LoRA dropout</label><input type="number" id="t-lora_dropout" step="0.01" min="0" max="0.9"></div>
+          <div><label class="f" for="t-warmup_ratio">Warm-up ratio</label><input type="number" id="t-warmup_ratio" step="0.01" min="0" max="1"></div>
+          <div><label class="f" for="t-lr_scheduler">LR schedule</label><select id="t-lr_scheduler"><option>cosine</option><option>linear</option><option>constant</option></select></div>
+          <div><label class="f" for="t-weight_decay">Weight decay</label><input type="number" id="t-weight_decay" step="0.01" min="0"></div>
+          <div><label class="f" for="t-max_grad_norm">Max grad norm</label><input type="number" id="t-max_grad_norm" step="0.1" min="0"></div>
+          <div><label class="f" for="t-seed">Seed</label><input type="number" id="t-seed" min="0"></div>
+          <div><label class="f" for="t-eval_fraction">Held-out eval share</label><input type="number" id="t-eval_fraction" step="0.05" min="0" max="0.5"></div>
+          <div><label class="f" for="t-eval_every">Evaluate every N steps</label><input type="number" id="t-eval_every" min="0"></div>
+          <div><label class="f" for="t-save_every">Checkpoint every N steps</label><input type="number" id="t-save_every" min="0"></div>
+          <div><label class="f" for="t-output_dir">Output folder</label><input type="text" id="t-output_dir" placeholder="automatic"></div>
+        </div>
+        <div class="checks" style="margin-top:10px">
+          <label><input type="checkbox" id="t-gradient_checkpointing">Gradient checkpointing (less memory)</label>
+          <label><input type="checkbox" id="t-train_on_prompt">Also train on prompts</label>
+          <label><input type="checkbox" id="t-resume_adapter">Continue the loaded adapter</label>
+        </div>
+      </details>
+      <div id="train-check" class="notice warn hidden"></div>
+      <div class="row end" style="margin-top:14px">
+        <button class="btn danger" id="train-stop" disabled>Stop &amp; save</button>
+        <button class="btn primary" id="train-start">Start training</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><h2>Progress</h2><span class="right muted" id="train-state">idle</span></div>
+      <div class="progress" style="margin:10px 0"><div id="train-bar"></div></div>
+      <div class="stats">
+        <div class="stat"><div class="l">Step</div><div class="v" id="s-step">–</div></div>
+        <div class="stat"><div class="l">Loss</div><div class="v" id="s-loss">–</div></div>
+        <div class="stat"><div class="l">Eval loss</div><div class="v" id="s-eval">–</div></div>
+        <div class="stat"><div class="l">Tokens / s</div><div class="v" id="s-tps">–</div></div>
+        <div class="stat"><div class="l">Elapsed</div><div class="v" id="s-elapsed">–</div></div>
+        <div class="stat"><div class="l">Remaining</div><div class="v" id="s-eta">–</div></div>
+      </div>
+      <div class="legend" style="margin-top:12px">
+        <span><i style="background:var(--chart-1);opacity:.35"></i>loss</span>
+        <span><i style="background:var(--chart-1)"></i>smoothed</span>
+        <span><i style="background:var(--chart-3)"></i>eval</span>
+        <span><i style="background:var(--chart-2)"></i>learning rate</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart" role="img" aria-label="Training loss chart"></canvas><div class="tip" id="chart-tip"></div></div>
+      <h3>Log</h3>
+      <div class="log" id="train-log" aria-live="off"></div>
+      <div id="train-out" class="notice ok hidden"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ TEST ============================ -->
+<section class="page" id="page-test">
+  <div class="grid cols-2">
+    <div class="card" style="grid-column: span 1">
+      <div class="row"><h2>Chat with the model</h2><span class="right chip" id="adapter-chip"><span class="dot"></span><span>no adapter</span></span></div>
+      <p class="sub">Try the base model before training, then again after training to see what it learned.</p>
+      <div class="chat" id="chat"><div class="empty" id="chat-empty">Send a message to start.</div></div>
+      <label class="f" for="prompt">Message</label>
+      <textarea id="prompt" rows="3" placeholder="Ask something…  (Ctrl+Enter to send)"></textarea>
+      <div class="row end" style="margin-top:8px">
+        <button class="btn" id="chat-clear">Clear chat</button>
+        <button class="btn danger" id="gen-stop" disabled>Stop</button>
+        <button class="btn primary" id="gen-send">Send</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Generation settings</h2>
+      <div class="checks" style="margin-top:8px">
+        <label><input type="checkbox" id="g-template" checked>Use chat format</label>
+        <label><input type="checkbox" id="g-history" checked>Remember conversation</label>
+      </div>
+      <label class="f" for="g-system">System prompt</label>
+      <input type="text" id="g-system" placeholder="(optional)">
+      <div class="f-grid">
+        <div><label class="f" for="g-max">Max new tokens</label><input type="number" id="g-max" value="256" min="1"></div>
+        <div><label class="f" for="g-temp">Temperature <span class="hint">0 = greedy</span></label><input type="number" id="g-temp" value="0.7" step="0.05" min="0"></div>
+        <div><label class="f" for="g-topp">Top-p</label><input type="number" id="g-topp" value="0.9" step="0.05" min="0" max="1"></div>
+        <div><label class="f" for="g-topk">Top-k</label><input type="number" id="g-topk" value="40" min="0"></div>
+        <div><label class="f" for="g-rep">Repeat penalty</label><input type="number" id="g-rep" value="1.1" step="0.05" min="1"></div>
+        <div><label class="f" for="g-seed">Seed <span class="hint">0 = random</span></label><input type="number" id="g-seed" value="0" min="0"></div>
+      </div>
+      <div id="gen-stats" class="muted" style="margin-top:12px;font-size:13px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ EXPORT ============================ -->
+<section class="page" id="page-export">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Adapter</h2>
+      <p class="sub">Training saves the adapter automatically. You can also save, load or remove it here.</p>
+      <div class="row">
+        <button class="btn" id="adapter-save">Save adapter now</button>
+        <button class="btn danger" id="adapter-remove">Remove adapter</button>
+      </div>
+      <label class="f" for="adapter-path">Load an adapter <span class="hint">(PEFT folder, adapter_model.safetensors or adapter .gguf)</span></label>
+      <div class="row">
+        <input type="text" id="adapter-path" placeholder="workspace/outputs/run-…" style="flex:1">
+        <button class="btn" id="adapter-load">Load</button>
+      </div>
+      <div id="adapter-msg" class="notice hidden"></div>
+
+      <h2 style="margin-top:22px">Merged model</h2>
+      <p class="sub">Bake the adapter into the base model to get one file you can share or run anywhere.</p>
+      <div class="f-grid">
+        <div>
+          <label class="f" for="ex-kind">Format</label>
+          <select id="ex-kind"><option value="merged_gguf">GGUF (llama.cpp, Ollama, LM Studio)</option><option value="merged_safetensors">safetensors (Hugging Face)</option></select>
+        </div>
+        <div>
+          <label class="f" for="ex-quant">GGUF quantization</label>
+          <select id="ex-quant">
+            <option value="same">same as base model</option><option value="f16">f16</option><option value="q8_0">q8_0</option>
+            <option value="q6_k">q6_k</option><option value="q5_k">q5_k</option><option value="q4_k">q4_k</option><option value="q4_0">q4_0</option><option value="f32">f32</option>
+          </select>
+        </div>
+        <div><label class="f" for="ex-name">File name</label><input type="text" id="ex-name" placeholder="automatic"></div>
+      </div>
+      <div class="row end" style="margin-top:12px"><button class="btn primary" id="ex-go">Export merged model</button></div>
+      <div id="ex-task" class="notice info hidden" role="status"></div>
+      <h3>Use it</h3>
+      <div style="font-size:14px">
+        <div>llama.cpp with the adapter:</div>
+        <pre class="cmd">llama-cli -m base-model.gguf --lora adapter.gguf</pre>
+        <div>Ollama (<code>Modelfile</code>):</div>
+        <pre class="cmd">FROM ./merged.gguf</pre>
+        <div>LM Studio: copy the merged <code>.gguf</code> into your models folder.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row"><h2>Output files</h2><button class="btn small right" id="files-refresh">↻ Refresh</button></div>
+      <p class="sub mono" id="files-root"></p>
+      <table class="files"><tbody id="files"></tbody></table>
+    </div>
+  </div>
+</section>
+</main>
+<div class="toast" id="toast" aria-live="assertive"></div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const state = { system: null, model: null, training: "idle", taskRunning: false, histLen: 0, logsLen: 0, history: [], evals: [], datasets: [], chat: [], generating: false };
+
+function toast(msg, kind = "info", ms = 5000) {
+  const d = document.createElement("div");
+  d.className = kind; d.textContent = msg;
+  $("#toast").appendChild(d);
+  setTimeout(() => d.remove(), ms);
+}
+async function api(path, opts = {}) {
+  const o = { ...opts };
+  if (o.json !== undefined) { o.body = JSON.stringify(o.json); o.headers = { "Content-Type": "application/json" }; delete o.json; }
+  const r = await fetch(path, o);
+  let data = null;
+  try { data = await r.json(); } catch (_) { /* empty body */ }
+  if (!r.ok) throw new Error((data && data.error) || `${r.status} ${r.statusText}`);
+  return data;
+}
+function fmtNum(x, d = 4) { return (x === null || x === undefined || !isFinite(x)) ? "–" : Number(x).toFixed(d); }
+function fmtTime(s) {
+  if (!isFinite(s) || s <= 0) return "–";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(sec).padStart(2, "0")}s` : `${sec}s`;
+}
+function fmtBig(n) { return n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n); }
+function setChip(id, cls, text) { const c = $(id); c.querySelector(".dot").className = "dot " + cls; c.querySelector("span:last-child").textContent = text; c.title = text; }
+
+/* ---------- theme & tabs ---------- */
+(function initTheme() {
+  let t = null; try { t = localStorage.getItem("theme"); } catch (_) {}
+  if (t) document.documentElement.dataset.theme = t;
+  $("#theme-btn").onclick = () => {
+    const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("theme", next); } catch (_) {}
+    drawChart();
+  };
+})();
+function showTab(name) {
+  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === name ? "true" : "false"));
+  $$("section.page").forEach(p => p.classList.toggle("active", p.id === "page-" + name));
+  try { localStorage.setItem("tab", name); } catch (_) {}
+  if (name === "train") requestAnimationFrame(drawChart);
+  if (name === "export") loadFiles();
+  if (name === "train") checkTrainReady();
+}
+$$("nav.tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+try { const t = localStorage.getItem("tab"); if (t) showTab(t); } catch (_) {}
+
+/* ---------- system & model ---------- */
+async function loadSystem() {
+  const s = await api("/api/system");
+  state.system = s;
+  const sy = s.system;
+  $("#models-dir").textContent = s.models_dir;
+  $("#cpu-desc").textContent = `${sy.cpu_threads} threads${sy.avx ? ", AVX" : ""}${sy.neon ? ", NEON" : ""}`;
+  const cuda = $("#dev-cuda"), metal = $("#dev-metal");
+  $("#cuda-desc").textContent = !sy.cuda_compiled ? "not built in" : sy.cuda_available ? "available" : "no GPU found";
+  $("#metal-desc").textContent = !sy.metal_compiled ? "not built in" : sy.metal_available ? "available" : "no GPU found";
+  cuda.classList.toggle("disabled", !sy.cuda_available); cuda.querySelector("input").disabled = !sy.cuda_available;
+  metal.classList.toggle("disabled", !sy.metal_available); metal.querySelector("input").disabled = !sy.metal_available;
+  cuda.title = sy.cuda_compiled ? "" : "Rebuild with: cargo build --release --features cuda";
+  metal.title = sy.metal_compiled ? "" : "Rebuild with: cargo build --release --features metal";
+  const gpu = sy.cuda_available ? "CUDA" : sy.metal_available ? "Metal" : "CPU only";
+  setChip("#chip-device", sy.cuda_available || sy.metal_available ? "ok" : "", gpu);
+  $("#sys-info").innerHTML = [
+    ["Version", sy.version], ["CPU threads", sy.cpu_threads],
+    ["CPU features", [sy.avx && "AVX", sy.f16c && "F16C", sy.neon && "NEON", sy.mkl && "MKL", sy.accelerate && "Accelerate"].filter(Boolean).join(", ") || "basic"],
+    ["CUDA", sy.cuda_compiled ? (sy.cuda_available ? "available" : "built in, no GPU found") : "not built in (--features cuda)"],
+    ["Metal", sy.metal_compiled ? (sy.metal_available ? "available" : "built in, no GPU found") : "not built in (--features metal)"],
+    ["Workspace", `<span class="mono">${esc(s.work_dir)}</span>`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  renderModel(s.model);
+}
+function renderModel(m) {
+  state.model = m;
+  $("#model-empty").classList.toggle("hidden", !!m);
+  $("#model-info").classList.toggle("hidden", !m);
+  if (!m) { setChip("#chip-model", "", "no model"); renderAdapterChip(); return; }
+  const w = Object.entries(m.weights || {}).map(([k, v]) => `${k} ×${v}`).join(", ");
+  const t = m.tokenizer || {};
+  $("#model-info").innerHTML = [
+    ["Name", esc(m.name)], ["Architecture", esc(m.arch)], ["Parameters", m.params_h],
+    ["Layers / hidden", `${m.layers} / ${m.hidden}`], ["Heads (KV)", `${m.heads} (${m.kv_heads}), head dim ${m.head_dim}`],
+    ["Vocabulary", fmtBig(m.vocab)], ["Context", fmtBig(m.context) + " tokens"], ["Weights", esc(w)],
+    ["Memory", m.memory], ["Device", esc(m.device)], ["Tokenizer", `${esc(t.kind)} (${esc(t.pre)})`],
+    ["Chat format", esc(m.chat_template)],
+    ["Adapter", m.adapter ? `rank ${m.adapter.rank}, alpha ${m.adapter.alpha}, ${fmtBig(m.adapter.params)} params` : "none"],
+    ["File", `<span class="mono">${esc(m.path)}</span>`],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  setChip("#chip-model", "ok", `${m.name} · ${m.params_h} · ${m.device}`);
+  renderAdapterChip();
+}
+function renderAdapterChip() {
+  const a = state.model && state.model.adapter;
+  setChip("#adapter-chip", a ? "ok" : "", a ? `adapter active (rank ${a.rank})` : "base model only");
+}
+async function loadModels() {
+  const r = await api("/api/models");
+  const sel = $("#model-select"), cur = sel.value;
+  sel.innerHTML = `<option value="">— ${r.models.length ? "select" : "no models found, put .gguf files in the models folder"} —</option>` +
+    r.models.map(m => `<option value="${esc(m.path)}">${esc(m.name)}  ·  ${m.kind}  ·  ${m.size}</option>`).join("");
+  sel.value = cur;
+}
+$("#model-select").onchange = e => { if (e.target.value) $("#model-path").value = e.target.value; };
+$("#models-refresh").onclick = () => loadModels().catch(e => toast(e.message, "err"));
+$("#model-upload").onclick = () => {
+  const f = $("#model-file").files[0];
+  if (!f) return toast("Choose a .gguf file first", "err");
+  const fd = new FormData(); fd.append("file", f, f.name);
+  const xhr = new XMLHttpRequest();
+  const bar = $("#upload-progress"); bar.classList.remove("hidden");
+  xhr.upload.onprogress = e => { if (e.lengthComputable) bar.firstElementChild.style.width = (100 * e.loaded / e.total).toFixed(1) + "%"; };
+  xhr.onload = async () => {
+    bar.classList.add("hidden");
+    let d = {}; try { d = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status !== 200) return toast(d.error || "Upload failed", "err");
+    toast("Uploaded " + f.name, "ok");
+    await loadModels();
+    if (d.saved && d.saved[0]) { $("#model-path").value = d.saved[0].path; $("#model-select").value = d.saved[0].path; }
+  };
+  xhr.onerror = () => { bar.classList.add("hidden"); toast("Upload failed", "err"); };
+  xhr.open("POST", "/api/models/upload"); xhr.send(fd);
+};
+function deviceString() {
+  const v = $("input[name=device]:checked").value;
+  return v === "cuda" || v === "metal" ? `${v}:${$("#gpu-index").value || 0}` : v;
+}
+$("#model-load").onclick = async () => {
+  const path = $("#model-path").value.trim();
+  if (!path) return toast("Choose a model first", "err");
+  try {
+    await api("/api/model/load", { method: "POST", json: { path, device: deviceString(), precision: $("#precision").value } });
+    watchTask("#model-task", async res => { renderModel(res); toast("Model loaded", "ok"); checkTrainReady(); });
+  } catch (e) { toast(e.message, "err"); }
+};
+$("#model-unload").onclick = async () => {
+  try { await api("/api/model/unload", { method: "POST" }); renderModel(null); toast("Model unloaded"); } catch (e) { toast(e.message, "err"); }
+};
+
+/* background tasks (model loading, export) */
+function watchTask(boxSel, onDone) {
+  const box = $(boxSel);
+  box.className = "notice info"; box.innerHTML = `<span class="spin"></span> starting…`;
+  state.taskRunning = true;
+  const tick = async () => {
+    let t;
+    try { t = await api("/api/task"); } catch (e) { setTimeout(tick, 1500); return; }
+    if (t.running) { box.innerHTML = `<span class="spin"></span> ${esc(t.name)}: ${esc(t.message)}`; setTimeout(tick, 600); return; }
+    state.taskRunning = false;
+    if (t.error) { box.className = "notice err"; box.textContent = t.error; toast(t.error, "err", 9000); }
+    else { box.className = "notice ok"; box.textContent = `${t.name}: done`; if (onDone) onDone(t.result); }
+  };
+  setTimeout(tick, 300);
+}
+
+/* ---------- data ---------- */
+const drop = $("#drop"), fileInput = $("#data-files");
+drop.onclick = () => fileInput.click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); uploadData(e.dataTransfer.files); };
+fileInput.onchange = () => { uploadData(fileInput.files); fileInput.value = ""; };
+async function uploadData(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f, f.name);
+  const st = $("#data-upload-status");
+  st.className = "notice info"; st.innerHTML = `<span class="spin"></span> Reading ${files.length} file(s)…`;
+  try {
+    const r = await api("/api/data/upload", { method: "POST", body: fd });
+    renderData(r.datasets);
+    if (r.errors && r.errors.length) {
+      st.className = "notice err";
+      st.innerHTML = r.errors.map(e => `<b>${esc(e.file)}</b>: ${esc(e.error)}`).join("<br>");
+    } else { st.className = "notice ok"; st.textContent = `Added ${r.added} file(s).`; }
+  } catch (e) { st.className = "notice err"; st.textContent = e.message; }
+}
+$("#paste-add").onclick = async () => {
+  try {
+    const r = await api("/api/data/text", { method: "POST", json: { name: $("#paste-name").value, text: $("#paste-text").value } });
+    $("#paste-text").value = ""; renderData(r.datasets); toast("Text added", "ok");
+  } catch (e) { toast(e.message, "err"); }
+};
+function renderData(list) {
+  state.datasets = list;
+  const box = $("#data-list");
+  if (!list.length) { box.innerHTML = `<div class="empty">No data yet.</div>`; $("#data-total").textContent = ""; checkTrainReady(); return; }
+  const on = list.filter(d => d.enabled);
+  const conv = on.reduce((a, d) => a + d.conversations, 0), docs = on.reduce((a, d) => a + d.documents, 0), chars = on.reduce((a, d) => a + d.characters, 0);
+  $("#data-total").textContent = `${conv} Q&A · ${docs} texts · ${fmtBig(chars)} characters`;
+  box.innerHTML = list.map(d => {
+    const what = d.conversations ? `${d.conversations} Q&A examples` : `${d.documents} text${d.documents === 1 ? "" : "s"}`;
+    const mapping = d.content === "records" ? mappingEditor(d) : "";
+    const prev = (d.preview || []).map(p => p.text !== undefined
+      ? `<div class="item">${esc(p.text)}</div>`
+      : `<div class="item">${p.system ? `<div class="lbl">system</div>${esc(p.system)}\n` : ""}<div class="lbl">prompt</div>${esc(p.prompt)}\n<div class="lbl">answer</div>${esc(p.response)}</div>`).join("");
+    return `<div class="ds ${d.enabled ? "" : "off"}" data-id="${d.id}">
+      <div class="ds-head">
+        <span class="badge k">${esc(d.kind)}</span><span class="ds-name">${esc(d.name)}</span>
+        <span class="ds-stats">${what} · ${fmtBig(d.characters)} chars</span>
+        <span class="right row" style="gap:6px">
+          <label class="checks" title="Use this dataset for training"><input type="checkbox" data-act="toggle" ${d.enabled ? "checked" : ""}>use</label>
+          <button class="btn small" data-act="sample" title="Show how the model sees the first example">Preview</button>
+          <button class="btn small danger" data-act="del" aria-label="Remove ${esc(d.name)}">✕</button>
+        </span>
+      </div>
+      ${mapping}
+      <details class="preview"><summary class="muted">Show examples</summary>${prev || '<div class="muted">empty</div>'}</details>
+      <div class="sample-box"></div>
+    </div>`;
+  }).join("");
+  checkTrainReady();
+}
+function mappingEditor(d) {
+  const opts = sel => `<option value="">(none)</option>` + d.columns.map(c => `<option ${c === sel ? "selected" : ""}>${esc(c)}</option>`).join("");
+  const m = d.mapping || {};
+  const textCols = d.columns.map(c => `<label><input type="checkbox" data-textcol value="${esc(c)}" ${(m.text || []).includes(c) ? "checked" : ""}>${esc(c)}</label>`).join("");
+  return `<details class="preview" ${m.prompt ? "" : "open"}><summary class="muted">Columns: ${m.prompt ? `prompt = <b>${esc(m.prompt)}</b>, answer = <b>${esc(m.response)}</b>` : "used as text"}</summary>
+    <div class="f-grid">
+      <div><label class="f">Prompt column</label><select data-map="prompt">${opts(m.prompt)}</select></div>
+      <div><label class="f">Extra input column</label><select data-map="input">${opts(m.input)}</select></div>
+      <div><label class="f">Answer column</label><select data-map="response">${opts(m.response)}</select></div>
+      <div><label class="f">System column</label><select data-map="system">${opts(m.system)}</select></div>
+    </div>
+    <label class="f">Text columns <span class="hint">(used when there is no prompt + answer)</span></label>
+    <div class="checks">${textCols}</div>
+    <div class="row end"><button class="btn small" data-act="map">Apply columns</button></div>
+  </details>`;
+}
+$("#data-list").addEventListener("click", async e => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const card = e.target.closest(".ds"), id = card.dataset.id, act = btn.dataset.act;
+  try {
+    if (act === "del") renderData((await api(`/api/data/${id}`, { method: "DELETE" })).datasets);
+    if (act === "toggle") renderData((await api(`/api/data/${id}`, { method: "PATCH", json: { enabled: btn.checked } })).datasets);
+    if (act === "map") {
+      const mapping = { text: $$("[data-textcol]", card).filter(c => c.checked).map(c => c.value) };
+      $$("[data-map]", card).forEach(s => mapping[s.dataset.map] = s.value || null);
+      renderData((await api(`/api/data/${id}`, { method: "PATCH", json: { mapping } })).datasets);
+      toast("Columns updated", "ok");
+    }
+    if (act === "sample") {
+      const q = new URLSearchParams({ template: $("#t-chat_template").value, system: $("#t-system_prompt").value });
+      const r = await api(`/api/data/${id}/sample?` + q);
+      const html = r.parts.map(p => p.train ? `<mark>${esc(p.text)}</mark>` : esc(p.text)).join("");
+      card.querySelector(".sample-box").innerHTML = `<div class="muted" style="margin:8px 0 4px;font-size:13px">Format: <b>${esc(r.template)}</b> · ${r.tokens} tokens, ${r.trained_tokens} trained (<mark>highlighted</mark>)</div><div class="sample">${html}</div>`;
+    }
+  } catch (err) { toast(err.message, "err"); }
+});
+
+/* ---------- training ---------- */
+const FIELDS = ["epochs", "max_steps", "learning_rate", "max_seq_len", "batch_size", "grad_accum", "lora_rank", "lora_alpha", "lora_dropout",
+  "warmup_ratio", "lr_scheduler", "weight_decay", "max_grad_norm", "seed", "eval_fraction", "eval_every", "save_every", "output_dir",
+  "chat_template", "data_mode", "system_prompt"];
+const BOOLS = ["gradient_checkpointing", "train_on_prompt", "resume_adapter"];
+let defaults = null;
+function fillConfig(c) {
+  FIELDS.forEach(k => { const el = $("#t-" + k); if (el && c[k] !== undefined) el.value = c[k]; });
+  BOOLS.forEach(k => { const el = $("#t-" + k); if (el && c[k] !== undefined) el.checked = !!c[k]; });
+  if (c.target_modules) $$("#t-targets input").forEach(i => i.checked = c.target_modules.includes(i.value));
+}
+function readConfig() {
+  const c = { ...defaults };
+  FIELDS.forEach(k => {
+    const el = $("#t-" + k); if (!el) return;
+    c[k] = el.type === "number" ? (el.value === "" ? defaults[k] : Number(el.value)) : el.value;
+  });
+  BOOLS.forEach(k => c[k] = $("#t-" + k).checked);
+  c.target_modules = $$("#t-targets input").filter(i => i.checked).map(i => i.value);
+  return c;
+}
+const PRESETS = {
+  quick: { epochs: 1, max_steps: 20, learning_rate: 0.0003, lora_rank: 8, lora_alpha: 16, max_seq_len: 256, grad_accum: 1, batch_size: 1 },
+  balanced: { epochs: 3, max_steps: 0, learning_rate: 0.0002, lora_rank: 16, lora_alpha: 32, max_seq_len: 512, grad_accum: 4, batch_size: 1 },
+  thorough: { epochs: 5, max_steps: 0, learning_rate: 0.0001, lora_rank: 32, lora_alpha: 64, max_seq_len: 1024, grad_accum: 8, batch_size: 1 },
+};
+$$("[data-preset]").forEach(b => b.onclick = () => { fillConfig(PRESETS[b.dataset.preset]); toast(`Preset "${b.textContent}" applied`); });
+function checkTrainReady() {
+  const msgs = [];
+  if (!state.model) msgs.push("Load a model first (step 1).");
+  if (!state.datasets.some(d => d.enabled)) msgs.push("Add some training data (step 2).");
+  const box = $("#train-check");
+  box.classList.toggle("hidden", !msgs.length);
+  box.innerHTML = msgs.join("<br>");
+}
+$("#train-start").onclick = async () => {
+  const cfg = readConfig();
+  if (!cfg.target_modules.length) return toast("Select at least one layer to adapt", "err");
+  try {
+    state.history = []; state.evals = []; state.histLen = 0; state.logsLen = 0; $("#train-log").textContent = "";
+    $("#train-out").classList.add("hidden");
+    const r = await api("/api/train/start", { method: "POST", json: cfg });
+    toast("Training started → " + r.output_dir, "ok");
+    pollTrain();
+  } catch (e) { toast(e.message, "err", 8000); }
+};
+$("#train-stop").onclick = async () => { try { await api("/api/train/stop", { method: "POST" }); toast("Stopping after the current step…"); } catch (e) { toast(e.message, "err"); } };
+let trainTimer = null;
+async function pollTrain() {
+  clearTimeout(trainTimer);
+  let s;
+  try { s = await api(`/api/train/status?since=${state.histLen}&logs_since=${state.logsLen}`); }
+  catch (e) { trainTimer = setTimeout(pollTrain, 3000); return; }
+  if (s.history_len < state.histLen) { state.history = []; state.histLen = 0; state.logsLen = 0; $("#train-log").textContent = ""; trainTimer = setTimeout(pollTrain, 100); return; }
+  state.history.push(...s.history); state.histLen = s.history_len;
+  state.evals = s.eval_history || [];
+  if (s.logs.length) {
+    const log = $("#train-log"), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent += s.logs.join("\n") + "\n";
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+  state.logsLen = s.logs_len;
+  const active = ["preparing", "training", "stopping"].includes(s.state);
+  const prevActive = ["preparing", "training", "stopping"].includes(state.training);
+  state.training = s.state;
+  $("#train-state").textContent = s.message || s.state;
+  $("#train-start").disabled = active; $("#train-stop").disabled = !active;
+  $("#train-bar").style.width = s.total_steps ? (100 * s.step / s.total_steps).toFixed(1) + "%" : "0";
+  $("#s-step").textContent = s.total_steps ? `${s.step} / ${s.total_steps}` : "–";
+  $("#s-loss").textContent = s.step ? fmtNum(s.smoothed_loss, 3) : "–";
+  $("#s-eval").textContent = s.eval_loss != null ? fmtNum(s.eval_loss, 3) : "–";
+  $("#s-tps").textContent = s.tokens_per_sec ? Math.round(s.tokens_per_sec) : "–";
+  $("#s-elapsed").textContent = fmtTime(s.elapsed_secs);
+  $("#s-eta").textContent = active ? fmtTime(s.eta_secs) : "–";
+  const cls = s.state === "failed" ? "err" : active ? "busy" : s.state === "finished" ? "ok" : s.state === "stopped" ? "warn" : "";
+  setChip("#chip-train", cls, active ? `training ${s.total_steps ? Math.round(100 * s.step / s.total_steps) + "%" : "…"}` : s.state);
+  if (prevActive && !active) {
+    if (s.state === "failed") toast("Training failed: " + s.message, "err", 12000);
+    else {
+      toast(s.message, "ok", 8000);
+      const out = $("#train-out"); out.classList.remove("hidden");
+      out.innerHTML = `Adapter saved in <span class="mono">${esc(s.output_dir)}</span>. Try it in <a href="#" data-goto="test">step 4</a> or export it in <a href="#" data-goto="export">step 5</a>.`;
+      refreshModel();
+    }
+  }
+  drawChart();
+  trainTimer = setTimeout(pollTrain, active ? 1000 : 5000);
+}
+document.addEventListener("click", e => { const a = e.target.closest("[data-goto]"); if (a) { e.preventDefault(); showTab(a.dataset.goto); } });
+async function refreshModel() { try { renderModel((await api("/api/model")).model); } catch (_) {} }
+
+/* loss chart */
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+let chartGeom = null;
+function drawChart() {
+  const cv = $("#chart"); if (!cv || !cv.offsetParent) return;
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const pts = state.history;
+  g.font = "12px system-ui, sans-serif"; g.fillStyle = cssVar("--muted");
+  if (!pts.length) { g.textAlign = "center"; g.fillText("The loss curve appears here once training starts.", W / 2, H / 2); chartGeom = null; return; }
+  const L = 46, R = 46, T = 10, B = 26, pw = W - L - R, ph = H - T - B;
+  const sm = []; let e = null;
+  for (const p of pts) { e = e === null ? p.loss : 0.9 * e + 0.1 * p.loss; sm.push(e); }
+  const losses = pts.map(p => p.loss).concat(state.evals.map(v => v[1]));
+  let lo = Math.min(...losses), hi = Math.max(...losses);
+  if (hi - lo < 1e-6) { hi += 0.5; lo -= 0.5; }
+  const pad = (hi - lo) * 0.08; lo = Math.max(0, lo - pad); hi += pad;
+  const maxStep = Math.max(pts[pts.length - 1].step, 2), maxLr = Math.max(...pts.map(p => p.lr)) || 1;
+  const x = s => L + (s - 1) / (maxStep - 1) * pw, y = v => T + (1 - (v - lo) / (hi - lo)) * ph, yl = v => T + (1 - v / maxLr) * ph;
+  g.strokeStyle = cssVar("--grid"); g.lineWidth = 1; g.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, yy = y(v);
+    g.beginPath(); g.moveTo(L, yy); g.lineTo(W - R, yy); g.stroke();
+    g.fillText(v.toFixed(v < 10 ? 2 : 1), L - 6, yy + 4);
+  }
+  g.textAlign = "center";
+  for (let i = 0; i <= 4; i++) { const s = Math.round(1 + (maxStep - 1) * i / 4); g.fillText(s, x(s), H - 8); }
+  g.textAlign = "left"; g.fillText(maxLr.toExponential(1), W - R + 4, T + 10);
+  const line = (vals, color, width, alpha, fy) => {
+    g.globalAlpha = alpha; g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+    vals.forEach((v, i) => { const px = x(pts[i].step), py = fy(v); i ? g.lineTo(px, py) : g.moveTo(px, py); });
+    g.stroke(); g.globalAlpha = 1;
+  };
+  line(pts.map(p => p.lr), cssVar("--chart-2"), 1.5, 0.8, yl);
+  line(pts.map(p => p.loss), cssVar("--chart-1"), 1, 0.35, y);
+  line(sm, cssVar("--chart-1"), 2.2, 1, y);
+  g.fillStyle = cssVar("--chart-3");
+  for (const [s, v] of state.evals) { g.beginPath(); g.arc(x(s), y(v), 4, 0, 7); g.fill(); }
+  chartGeom = { x, L, pw, maxStep, sm };
+}
+$("#chart").addEventListener("mousemove", e => {
+  const tip = $("#chart-tip"); if (!chartGeom || !state.history.length) return;
+  const r = e.target.getBoundingClientRect(), mx = e.clientX - r.left;
+  const step = Math.round(1 + (mx - chartGeom.L) / chartGeom.pw * (chartGeom.maxStep - 1));
+  const i = state.history.findIndex(p => p.step >= step); const p = state.history[i < 0 ? state.history.length - 1 : i];
+  if (!p) return;
+  tip.style.display = "block";
+  tip.innerHTML = `step ${p.step} · loss ${p.loss.toFixed(4)} · lr ${p.lr.toExponential(2)} · grad ${p.grad_norm.toFixed(2)}`;
+  tip.style.left = Math.min(mx + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
+});
+$("#chart").addEventListener("mouseleave", () => $("#chart-tip").style.display = "none");
+window.addEventListener("resize", drawChart);
+
+/* ---------- playground ---------- */
+function addMsg(role, text) {
+  $("#chat-empty")?.remove();
+  const d = document.createElement("div");
+  d.className = "msg " + role; d.textContent = text;
+  $("#chat").appendChild(d); $("#chat").scrollTop = $("#chat").scrollHeight;
+  return d;
+}
+async function send() {
+  const prompt = $("#prompt").value.trim();
+  if (!prompt || state.generating) return;
+  if (!state.model) return toast("Load a model first", "err");
+  $("#prompt").value = "";
+  addMsg("user", prompt);
+  const bot = addMsg("bot", "");
+  const history = $("#g-history").checked ? state.chat.slice() : [];
+  const body = {
+    prompt, system: $("#g-system").value, history, use_template: $("#g-template").checked, template: $("#t-chat_template").value,
+    params: { max_new_tokens: +$("#g-max").value, temperature: +$("#g-temp").value, top_p: +$("#g-topp").value,
+      top_k: +$("#g-topk").value, repeat_penalty: +$("#g-rep").value, repeat_last_n: 64, seed: +$("#g-seed").value },
+  };
+  state.generating = true; $("#gen-send").disabled = true; $("#gen-stop").disabled = false;
+  let text = "";
+  try {
+    const r = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error; } catch (_) {} throw new Error(m); }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.text) { text += ev.text; bot.textContent = text; $("#chat").scrollTop = $("#chat").scrollHeight; }
+        if (ev.error) throw new Error(ev.error);
+        if (ev.done) {
+          const s = ev.stats;
+          $("#gen-stats").textContent = `${s.prompt_tokens} prompt tokens (${s.prompt_secs.toFixed(2)} s) · ${s.generated_tokens} new tokens at ${s.tokens_per_sec.toFixed(1)} tok/s · stopped by ${s.stop_reason}`;
+        }
+      }
+    }
+    state.chat.push([prompt, text]);
+  } catch (e) { bot.textContent = text + (text ? "\n" : "") + "⚠ " + e.message; bot.style.color = "var(--err)"; }
+  state.generating = false; $("#gen-send").disabled = false; $("#gen-stop").disabled = true;
+}
+$("#gen-send").onclick = send;
+$("#prompt").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } });
+$("#gen-stop").onclick = () => api("/api/generate/stop", { method: "POST" }).catch(() => {});
+$("#chat-clear").onclick = () => { state.chat = []; $("#chat").innerHTML = `<div class="empty" id="chat-empty">Send a message to start.</div>`; $("#gen-stats").textContent = ""; };
+
+/* ---------- export ---------- */
+function adapterMsg(text, kind) { const b = $("#adapter-msg"); b.className = "notice " + kind; b.innerHTML = text; }
+$("#adapter-save").onclick = async () => {
+  try { const r = await api("/api/adapter/save", { method: "POST", json: {} }); adapterMsg(`Saved to <span class="mono">${esc(r.dir)}</span>`, "ok"); loadFiles(); }
+  catch (e) { adapterMsg(esc(e.message), "err"); }
+};
+$("#adapter-load").onclick = async () => {
+  try { const r = await api("/api/adapter/load", { method: "POST", json: { path: $("#adapter-path").value } }); adapterMsg(esc(r.message), "ok"); refreshModel(); }
+  catch (e) { adapterMsg(esc(e.message), "err"); }
+};
+$("#adapter-remove").onclick = async () => {
+  try { await api("/api/adapter/remove", { method: "POST" }); adapterMsg("Adapter removed — the model is back to its original weights.", "info"); refreshModel(); }
+  catch (e) { adapterMsg(esc(e.message), "err"); }
+};
+$("#ex-kind").onchange = () => { $("#ex-quant").disabled = $("#ex-kind").value !== "merged_gguf"; };
+$("#ex-go").onclick = async () => {
+  try {
+    await api("/api/export", { method: "POST", json: { kind: $("#ex-kind").value, quant: $("#ex-quant").value, name: $("#ex-name").value } });
+    watchTask("#ex-task", res => {
+      const box = $("#ex-task");
+      box.innerHTML = `Exported <span class="mono">${esc(res.path)}</span>` + (res.download && !$("#ex-kind").value.includes("safetensors") ? ` — <a href="/api/download/${encodeURI(res.download)}">download</a>` : "");
+      loadFiles();
+    });
+  } catch (e) { toast(e.message, "err"); }
+};
+async function loadFiles() {
+  try {
+    const r = await api("/api/files");
+    $("#files-root").textContent = r.root;
+    $("#files").innerHTML = r.files.length ? r.files.map(f => `<tr><td class="path mono">${esc(f.path)}</td><td class="muted">${f.size}</td>
+      <td style="text-align:right;white-space:nowrap">${/adapter(_model\.safetensors|\.gguf)$/.test(f.path) ? `<button class="btn small" data-useadapter="${esc(f.path)}">Load</button> ` : ""}<a class="btn small" style="text-decoration:none" href="/api/download/${encodeURI(f.path)}">Download</a></td></tr>`).join("")
+      : `<tr><td class="muted">Nothing yet — train a model or export one.</td></tr>`;
+  } catch (e) { toast(e.message, "err"); }
+}
+$("#files-refresh").onclick = loadFiles;
+$("#files").addEventListener("click", e => {
+  const b = e.target.closest("[data-useadapter]"); if (!b) return;
+  $("#adapter-path").value = (state.system ? state.system.outputs_dir + "/" : "") + b.dataset.useadapter;
+  $("#adapter-load").click();
+});
+
+/* ---------- start ---------- */
+(async function init() {
+  try {
+    await loadSystem();
+    defaults = await api("/api/train/defaults");
+    fillConfig(defaults);
+    await loadModels();
+    renderData((await api("/api/data")).datasets);
+    const t = await api("/api/task");
+    if (t.running) watchTask(t.name === "export" ? "#ex-task" : "#model-task", res => res && res.arch ? renderModel(res) : loadFiles());
+  } catch (e) { toast("Cannot reach the server: " + e.message, "err", 10000); }
+  pollTrain();
+})();
+</script>
+</body>
+</html>
