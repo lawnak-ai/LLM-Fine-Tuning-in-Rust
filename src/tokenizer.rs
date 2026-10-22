@@ -350,7 +350,7 @@ impl Tokenizer {
             })
             .collect();
         // Longest match wins.
-        specials.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        specials.sort_by_key(|s| std::cmp::Reverse(s.0.len()));
         let mut by_first: HashMap<char, Vec<usize>> = HashMap::new();
         for (i, (s, _, _)) in specials.iter().enumerate() {
             if let Some(c) = s.chars().next() {
@@ -595,11 +595,7 @@ impl Tokenizer {
                         *prefix = true;
                     }
                 }
-                "Replace" => {
-                    if n["content"].as_str() == Some("\u{2581}") {
-                        *metaspace = true;
-                    }
-                }
+                "Replace" if n["content"].as_str() == Some("\u{2581}") => *metaspace = true,
                 _ => {}
             }
         }
