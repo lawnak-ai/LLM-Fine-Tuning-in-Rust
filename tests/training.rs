@@ -30,7 +30,12 @@ fn toy_tokenizer() -> Tokenizer {
         vocab.insert(char::from_u32(*c).unwrap().to_string(), json!(i));
     }
     let sp = char::from_u32(cs[bs.iter().position(|&b| b == b' ' as u32).unwrap()]).unwrap();
-    let merges = vec![format!("{sp} t"), "h e".into(), format!("{sp}t he"), "i s".into()];
+    let merges = vec![
+        format!("{sp} t"),
+        "h e".into(),
+        format!("{sp}t he"),
+        "i s".into(),
+    ];
     let mut next = 256;
     for m in &merges {
         vocab.insert(m.replace(' ', ""), json!(next));
@@ -72,12 +77,23 @@ fn tiny_model(vocab: usize, rope: RopeStyle) -> Model {
 }
 
 fn logits(m: &Model, ids: &[u32]) -> Vec<f32> {
-    let t = Tensor::new(ids, &Device::Cpu).unwrap().unsqueeze(0).unwrap();
-    m.forward(&t, &Ctx::inference()).unwrap().flatten_all().unwrap().to_vec1().unwrap()
+    let t = Tensor::new(ids, &Device::Cpu)
+        .unwrap()
+        .unsqueeze(0)
+        .unwrap();
+    m.forward(&t, &Ctx::inference())
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap()
 }
 
 fn max_diff(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f32::max)
 }
 
 #[test]
@@ -86,11 +102,16 @@ fn train_save_and_reload_adapters() {
     let csv = "question,answer\nWhat is the capital of France?,Paris is the capital of France.\nWhat colour is the sky?,The sky is blue.\nWho wrote Hamlet?,Hamlet was written by Shakespeare.\n";
     let datasets = vec![
         Dataset::from_bytes("d1".into(), "qa.csv", csv.as_bytes()).unwrap(),
-        Dataset::from_text("d2".into(), "notes", "Rust is a systems programming language. It is fast and memory safe."),
+        Dataset::from_text(
+            "d2".into(),
+            "notes",
+            "Rust is a systems programming language. It is fast and memory safe.",
+        ),
     ];
     for rope in [RopeStyle::Half, RopeStyle::Interleaved] {
         let model = Arc::new(RwLock::new(tiny_model(tok.vocab_size(), rope)));
-        let dir = std::env::temp_dir().join(format!("llmft-test-{}-{:?}", std::process::id(), rope));
+        let dir =
+            std::env::temp_dir().join(format!("llmft-test-{}-{:?}", std::process::id(), rope));
         let _ = std::fs::remove_dir_all(&dir);
         let cfg = TrainConfig {
             lora_rank: 8,
@@ -115,13 +136,33 @@ fn train_save_and_reload_adapters() {
             output_dir: dir.clone(),
         });
         let st = status.lock().unwrap().clone();
-        assert_eq!(st.state, "finished", "{}\n{}", st.message, st.logs.join("\n"));
+        assert_eq!(
+            st.state,
+            "finished",
+            "{}\n{}",
+            st.message,
+            st.logs.join("\n")
+        );
         assert_eq!(st.history.len(), 40);
-        assert!(st.logs.iter().any(|l| l.contains("3 conversations -> 3 chat samples")), "{}", st.logs.join("\n"));
+        assert!(
+            st.logs
+                .iter()
+                .any(|l| l.contains("3 conversations -> 3 chat samples")),
+            "{}",
+            st.logs.join("\n")
+        );
         let first: f64 = st.history[..5].iter().map(|p| p.loss).sum::<f64>() / 5.0;
         let last: f64 = st.history[35..].iter().map(|p| p.loss).sum::<f64>() / 5.0;
-        assert!(last < first * 0.6, "loss did not go down enough: {first} -> {last}");
-        for f in ["adapter_model.safetensors", "adapter_config.json", "adapter.gguf", "training_log.json"] {
+        assert!(
+            last < first * 0.6,
+            "loss did not go down enough: {first} -> {last}"
+        );
+        for f in [
+            "adapter_model.safetensors",
+            "adapter_config.json",
+            "adapter.gguf",
+            "training_log.json",
+        ] {
             assert!(dir.join(f).exists(), "{f} missing");
         }
 
@@ -134,7 +175,11 @@ fn train_save_and_reload_adapters() {
             let mut fresh = tiny_model(tok.vocab_size(), rope);
             export::load_adapter(&mut fresh, &adapter).unwrap();
             let d = max_diff(&logits(&fresh, &ids), &trained);
-            assert!(d < 1e-4, "{rope:?} reload of {} differs by {d}", adapter.display());
+            assert!(
+                d < 1e-4,
+                "{rope:?} reload of {} differs by {d}",
+                adapter.display()
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,11 +1,8 @@
-//! LoRA / QLoRA training loop.
+//! LoRA training loop.
 //!
-//! Memory savers:
-//! * frozen weights get no gradients (see `model::linear`),
-//! * optional gradient checkpointing: blocks are re-run one at a time during
-//!   the backward pass so only one block's activations live at once,
-//! * the vocabulary projection + cross-entropy run in chunks, so the
-//!   (tokens x vocab) logits matrix is never materialised in full.
+//! To keep memory down, frozen weights get no gradients, blocks can be recomputed
+//! during the backward pass (gradient checkpointing), and the LM head + loss run in
+//! chunks so the full tokens x vocab logits matrix never exists.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -101,7 +98,10 @@ impl TrainConfig {
                 "all" | "all-linear" => return Ok(Proj::ALL.to_vec()),
                 "attn" | "attention" => v.extend([Proj::Q, Proj::K, Proj::V, Proj::O]),
                 "mlp" | "ffn" => v.extend([Proj::Gate, Proj::Up, Proj::Down]),
-                other => v.push(Proj::parse(other).with_context(|| format!("unknown target module '{other}'"))?),
+                other => v.push(
+                    Proj::parse(other)
+                        .with_context(|| format!("unknown target module '{other}'"))?,
+                ),
             }
         }
         v.sort_by_key(|p| *p as u8);
@@ -164,7 +164,10 @@ pub struct TrainStatus {
 
 impl TrainStatus {
     pub fn idle() -> Self {
-        Self { state: "idle".into(), ..Default::default() }
+        Self {
+            state: "idle".into(),
+            ..Default::default()
+        }
     }
 
     pub fn log(&mut self, msg: impl Into<String>) {
@@ -193,7 +196,13 @@ struct Batch {
 }
 
 fn make_batch(samples: &[&Sample], pad: u32, device: &Device) -> Result<Batch> {
-    let t = samples.iter().map(|s| s.ids.len()).max().unwrap_or(1).saturating_sub(1).max(1);
+    let t = samples
+        .iter()
+        .map(|s| s.ids.len())
+        .max()
+        .unwrap_or(1)
+        .saturating_sub(1)
+        .max(1);
     let b = samples.len();
     let mut input = vec![pad; b * t];
     let mut positions = vec![];
@@ -225,10 +234,8 @@ fn head_chunk(vocab: usize) -> usize {
     ((1usize << 25) / vocab.max(1)).clamp(8, 4096)
 }
 
-/// Final norm + LM head + summed cross-entropy. Returns (loss sum, dL/dh).
-///
-/// The vocabulary projection is the largest matrix of the model, so it runs in row
-/// chunks with a fused cross-entropy and a manual backward pass (no autograd graph).
+/// Final norm + LM head + summed cross-entropy, returns (loss sum, dL/dh).
+/// Runs the head in chunks of rows without an autograd graph.
 fn head_loss_and_grad(model: &Model, h: &Tensor, batch: &Batch) -> Result<(f64, Tensor)> {
     let (b, t, d) = h.dims3()?;
     let hv = Var::from_tensor(h)?;
@@ -245,20 +252,39 @@ fn head_loss_and_grad(model: &Model, h: &Tensor, batch: &Batch) -> Result<(f64, 
         let logits = model.logits(&sel_det.narrow(0, start, c)?)?;
         let (nll, g) = cross_entropy_with_grad(&logits, &targets[start..start + c], true)?;
         loss_sum += nll;
-        grads.push(model.lm_head.weight.backward_input(&g.context("missing logits gradient")?)?);
+        grads.push(
+            model
+                .lm_head
+                .weight
+                .backward_input(&g.context("missing logits gradient")?)?,
+        );
         start += c;
     }
     let gsel = Tensor::cat(&grads, 0)?;
     let gs = sel.mul(&gsel)?.sum_all()?.backward()?;
-    let gh = gs.get(hv.as_tensor()).context("missing hidden gradient")?.clone();
+    let gh = gs
+        .get(hv.as_tensor())
+        .context("missing hidden gradient")?
+        .clone();
     Ok((loss_sum, gh))
 }
 
 /// Forward + backward for one micro batch. Gradients are for the *summed* loss.
-fn micro_step(model: &Model, batch: &Batch, seed: u64, checkpointing: bool) -> Result<(f64, HashMap<TensorId, Tensor>)> {
+fn micro_step(
+    model: &Model,
+    batch: &Batch,
+    seed: u64,
+    checkpointing: bool,
+) -> Result<(f64, HashMap<TensorId, Tensor>)> {
     let n_layers = model.blocks.len();
-    let ctx_ng = Ctx { grad: false, dropout_seed: Some(seed) };
-    let ctx_g = Ctx { grad: true, dropout_seed: Some(seed) };
+    let ctx_ng = Ctx {
+        grad: false,
+        dropout_seed: Some(seed),
+    };
+    let ctx_g = Ctx {
+        grad: true,
+        dropout_seed: Some(seed),
+    };
     let x0 = model.embed(&batch.input)?;
     let mut out: HashMap<TensorId, Tensor> = HashMap::new();
     if batch.n_targets == 0 {
@@ -276,7 +302,11 @@ fn micro_step(model: &Model, batch: &Batch, seed: u64, checkpointing: bool) -> R
         for li in (0..n_layers).rev() {
             let xin = inputs.pop().unwrap();
             let vars = model.layer_lora_vars(li);
-            let xv = if li > 0 { Some(Var::from_tensor(&xin)?) } else { None };
+            let xv = if li > 0 {
+                Some(Var::from_tensor(&xin)?)
+            } else {
+                None
+            };
             let x_in = xv.as_ref().map(|v| v.as_tensor().clone()).unwrap_or(xin);
             let y = model.block_forward(li, &x_in, &ctx_g, None)?;
             let gs = y.mul(&g)?.sum_all()?.backward()?;
@@ -286,7 +316,10 @@ fn micro_step(model: &Model, batch: &Batch, seed: u64, checkpointing: bool) -> R
                 }
             }
             if let Some(xv) = xv {
-                g = gs.get(xv.as_tensor()).context("missing block input gradient")?.clone();
+                g = gs
+                    .get(xv.as_tensor())
+                    .context("missing block input gradient")?
+                    .clone();
             }
         }
         Ok((loss, out))
@@ -335,7 +368,10 @@ pub fn evaluate(model: &Model, samples: &[Sample], batch_size: usize, pad: u32) 
             x = model.block_forward(li, &x, &Ctx::inference(), None)?;
         }
         let (b, t, d) = x.dims3()?;
-        let hn = model.final_norm(&x)?.reshape((b * t, d))?.index_select(&batch.positions, 0)?;
+        let hn = model
+            .final_norm(&x)?
+            .reshape((b * t, d))?
+            .index_select(&batch.positions, 0)?;
         let chunk = head_chunk(model.cfg.vocab_size);
         let targets = batch.targets.to_vec1::<u32>()?;
         let mut start = 0;
@@ -381,10 +417,17 @@ impl AdamW {
         for (i, var) in vars.iter().enumerate() {
             let g = &grads[i];
             let m = (self.m[i].affine(self.beta1, 0.0)? + g.affine(1.0 - self.beta1, 0.0)?)?;
-            let v = (self.v[i].affine(self.beta2, 0.0)? + g.sqr()?.affine(1.0 - self.beta2, 0.0)?)?;
-            let update = m.affine(1.0 / bc1, 0.0)?.div(&(v.affine(1.0 / bc2, 0.0)?.sqrt()? + self.eps)?)?;
+            let v =
+                (self.v[i].affine(self.beta2, 0.0)? + g.sqr()?.affine(1.0 - self.beta2, 0.0)?)?;
+            let update = m
+                .affine(1.0 / bc1, 0.0)?
+                .div(&(v.affine(1.0 / bc2, 0.0)?.sqrt()? + self.eps)?)?;
             let p = var.as_tensor().detach();
-            let p = if self.weight_decay > 0.0 { p.affine(1.0 - lr * self.weight_decay, 0.0)? } else { p };
+            let p = if self.weight_decay > 0.0 {
+                p.affine(1.0 - lr * self.weight_decay, 0.0)?
+            } else {
+                p
+            };
             var.set(&(p - update.affine(lr, 0.0)?)?)?;
             self.m[i] = m;
             self.v[i] = v;
@@ -398,7 +441,11 @@ fn lr_at(cfg: &TrainConfig, step: usize, total: usize) -> f64 {
     if step < warmup {
         return cfg.learning_rate * (step + 1) as f64 / warmup as f64;
     }
-    let progress = if total > warmup { (step - warmup) as f64 / (total - warmup) as f64 } else { 1.0 };
+    let progress = if total > warmup {
+        (step - warmup) as f64 / (total - warmup) as f64
+    } else {
+        1.0
+    };
     match cfg.lr_scheduler.as_str() {
         "constant" => cfg.learning_rate,
         "linear" => cfg.learning_rate * (1.0 - progress).max(0.0),
@@ -443,13 +490,21 @@ fn run_inner(job: &TrainJob) -> Result<()> {
     let cfg = &job.cfg;
     cfg.validate()?;
     let status = &job.status;
-    set_state(status, "preparing", "Preparing data…");
+    set_state(status, "preparing", "Preparing data");
 
     let tok = &job.tokenizer;
     let template = TemplateKind::parse(&cfg.chat_template)?;
     let formatter = ChatFormatter::new(template, tok);
-    let mode = if cfg.data_mode == "text" { DataMode::Text } else { DataMode::Auto };
-    let system = if cfg.system_prompt.trim().is_empty() { None } else { Some(cfg.system_prompt.clone()) };
+    let mode = if cfg.data_mode == "text" {
+        DataMode::Text
+    } else {
+        DataMode::Auto
+    };
+    let system = if cfg.system_prompt.trim().is_empty() {
+        None
+    } else {
+        Some(cfg.system_prompt.clone())
+    };
     let opts = SampleOptions {
         max_len: cfg.max_seq_len,
         train_on_prompt: cfg.train_on_prompt,
@@ -484,12 +539,25 @@ fn run_inner(job: &TrainJob) -> Result<()> {
     let targets = cfg.targets()?;
     {
         let mut model = job.model.write().unwrap();
-        let reuse = cfg.resume_adapter && model.lora.as_ref().map(|l| l.targets == targets).unwrap_or(false);
+        let reuse = cfg.resume_adapter
+            && model
+                .lora
+                .as_ref()
+                .map(|l| l.targets == targets)
+                .unwrap_or(false);
         if reuse {
             model.set_lora_dropout(cfg.lora_dropout);
-            status.lock().unwrap().log("continuing with the loaded adapter");
+            status
+                .lock()
+                .unwrap()
+                .log("continuing with the loaded adapter");
         } else {
-            let lc = LoraConfig { rank: cfg.lora_rank, alpha: cfg.lora_alpha, dropout: cfg.lora_dropout, targets: targets.clone() };
+            let lc = LoraConfig {
+                rank: cfg.lora_rank,
+                alpha: cfg.lora_alpha,
+                dropout: cfg.lora_dropout,
+                targets: targets.clone(),
+            };
             model.attach_lora(lc, cfg.seed)?;
         }
     }
@@ -500,14 +568,18 @@ fn run_inner(job: &TrainJob) -> Result<()> {
 
     let micro_per_epoch = train.len().div_ceil(cfg.batch_size);
     let steps_per_epoch = micro_per_epoch.div_ceil(cfg.grad_accum).max(1);
-    let total_steps = if cfg.max_steps > 0 { cfg.max_steps } else { steps_per_epoch * cfg.epochs };
+    let total_steps = if cfg.max_steps > 0 {
+        cfg.max_steps
+    } else {
+        steps_per_epoch * cfg.epochs
+    };
     {
         let mut st = status.lock().unwrap();
         st.state = "training".into();
         st.total_steps = total_steps;
         st.trainable_params = trainable;
         st.output_dir = Some(job.output_dir.display().to_string());
-        st.message = "Training…".into();
+        st.message = "Training".into();
         st.log(format!(
             "training {} LoRA parameters ({:.3}% of the model) for {} steps on {} (rank {}, alpha {}, batch {} x {} accum, seq {})",
             trainable,
@@ -572,7 +644,7 @@ fn run_inner(job: &TrainJob) -> Result<()> {
         if n_targets == 0 {
             continue;
         }
-        // Mean over all target tokens of the accumulated micro batches.
+        // average over all target tokens of the accumulated micro batches
         let scale = 1.0 / n_targets as f64;
         let mut grads = Vec::with_capacity(vars.len());
         let mut sq = 0.0f64;
@@ -586,7 +658,10 @@ fn run_inner(job: &TrainJob) -> Result<()> {
         }
         let norm = sq.sqrt();
         if !norm.is_finite() {
-            bail!("gradient became NaN/inf at step {} — try a lower learning rate", step + 1);
+            bail!(
+                "loss became NaN at step {}, try a lower learning rate",
+                step + 1
+            );
         }
         if cfg.max_grad_norm > 0.0 && norm > cfg.max_grad_norm {
             let s = cfg.max_grad_norm / (norm + 1e-6);
@@ -597,7 +672,11 @@ fn run_inner(job: &TrainJob) -> Result<()> {
         opt.step(&vars, &grads, lr)?;
 
         let loss = loss_sum / n_targets as f64;
-        smoothed = if smoothed.is_nan() { loss } else { 0.9 * smoothed + 0.1 * loss };
+        smoothed = if smoothed.is_nan() {
+            loss
+        } else {
+            0.9 * smoothed + 0.1 * loss
+        };
         let elapsed = started.elapsed().as_secs_f64();
         {
             let mut st = status.lock().unwrap();
@@ -611,9 +690,22 @@ fn run_inner(job: &TrainJob) -> Result<()> {
             st.trained_tokens = trained_tokens;
             st.tokens_per_sec = trained_tokens as f64 / elapsed.max(1e-6);
             st.eta_secs = elapsed / (step + 1) as f64 * (total_steps - step - 1) as f64;
-            st.history.push(StepPoint { step: step + 1, loss, lr, grad_norm: norm });
+            st.history.push(StepPoint {
+                step: step + 1,
+                loss,
+                lr,
+                grad_norm: norm,
+            });
             let tps = st.tokens_per_sec;
-            st.log(format!("step {}/{}  loss {:.4}  lr {:.2e}  grad-norm {:.3}  {:.0} tok/s", step + 1, total_steps, loss, lr, norm, tps));
+            st.log(format!(
+                "step {}/{}  loss {:.4}  lr {:.2e}  grad-norm {:.3}  {:.0} tok/s",
+                step + 1,
+                total_steps,
+                loss,
+                lr,
+                norm,
+                tps
+            ));
         }
         let last = step + 1 == total_steps;
         if !eval.is_empty() && ((cfg.eval_every > 0 && (step + 1) % cfg.eval_every == 0) || last) {
@@ -626,7 +718,11 @@ fn run_inner(job: &TrainJob) -> Result<()> {
         if cfg.save_every > 0 && (step + 1) % cfg.save_every == 0 && !last {
             let dir = job.output_dir.join(format!("checkpoint-{}", step + 1));
             let files = export::save_peft_adapter(&model, tok, &dir)?;
-            status.lock().unwrap().log(format!("checkpoint saved to {} ({} files)", dir.display(), files.len()));
+            status.lock().unwrap().log(format!(
+                "checkpoint saved to {} ({} files)",
+                dir.display(),
+                files.len()
+            ));
         }
     }
 
@@ -645,12 +741,21 @@ fn run_inner(job: &TrainJob) -> Result<()> {
     Ok(())
 }
 
-fn save_outputs(model: &Model, tok: &Tokenizer, job: &TrainJob, cfg: &TrainConfig) -> Result<Vec<PathBuf>> {
+fn save_outputs(
+    model: &Model,
+    tok: &Tokenizer,
+    job: &TrainJob,
+    cfg: &TrainConfig,
+) -> Result<Vec<PathBuf>> {
     let dir = &job.output_dir;
     let mut files = export::save_peft_adapter(model, tok, dir)?;
     match export::save_gguf_adapter(model, &dir.join("adapter.gguf")) {
         Ok(p) => files.push(p),
-        Err(e) => job.status.lock().unwrap().log(format!("could not write GGUF adapter: {e:#}")),
+        Err(e) => job
+            .status
+            .lock()
+            .unwrap()
+            .log(format!("could not write GGUF adapter: {e:#}")),
     }
     let st = job.status.lock().unwrap().clone();
     let log = serde_json::json!({

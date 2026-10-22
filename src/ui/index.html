@@ -168,12 +168,12 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
       <p class="sub">GGUF files (llama.cpp / Ollama / LM Studio format) or Hugging Face folders with <code>config.json</code> + <code>*.safetensors</code>. Supported families: Llama 2/3, Mistral, TinyLlama, SmolLM, Qwen 2 / 2.5 / 3.</p>
       <label class="f" for="model-select">Models found in <span class="mono" id="models-dir">models/</span></label>
       <div class="row">
-        <select id="model-select" style="flex:1"><option value="">— select —</option></select>
+        <select id="model-select" style="flex:1"><option value="">select a model</option></select>
         <button class="btn" id="models-refresh" title="Rescan the models folder">↻ Refresh</button>
       </div>
-      <label class="f" for="model-path">…or a path on this computer</label>
+      <label class="f" for="model-path">or a path on this computer</label>
       <input type="text" id="model-path" placeholder="/path/to/model.gguf  or  /path/to/hf-model-folder" autocomplete="off">
-      <label class="f">…or upload a .gguf file <span class="hint">(copied into the models folder)</span></label>
+      <label class="f">or upload a .gguf file <span class="hint">(copied into the models folder)</span></label>
       <div class="row">
         <input type="file" id="model-file" accept=".gguf">
         <button class="btn" id="model-upload">Upload</button>
@@ -193,11 +193,11 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
           <label class="f" for="precision">Base weights in memory</label>
           <select id="precision">
             <option value="auto">Keep as in file (QLoRA for quantized GGUF)</option>
-            <option value="f32">f32 — exact, most memory</option>
-            <option value="f16">f16 — half memory</option>
+            <option value="f32">f32 (exact, most memory)</option>
+            <option value="f16">f16 (half the memory)</option>
             <option value="bf16">bf16</option>
-            <option value="q8_0">q8_0 — quantize on load (≈¼ memory)</option>
-            <option value="q4_k">q4_k — quantize on load (≈⅛ memory)</option>
+            <option value="q8_0">q8_0 (quantize on load, ~1/4 memory)</option>
+            <option value="q4_k">q4_k (quantize on load, ~1/8 memory)</option>
           </select>
         </div>
       </div>
@@ -239,7 +239,7 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
         <label class="f" for="paste-name">Name</label>
         <input type="text" id="paste-name" placeholder="my notes">
         <label class="f" for="paste-text">Text</label>
-        <textarea id="paste-text" rows="6" placeholder="Paste any text the model should learn…"></textarea>
+        <textarea id="paste-text" rows="6" placeholder="Paste any text the model should learn"></textarea>
         <div class="row end" style="margin-top:8px"><button class="btn" id="paste-add">Add text</button></div>
       </details>
       <h3>How files are used</h3>
@@ -362,7 +362,7 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
       <p class="sub">Try the base model before training, then again after training to see what it learned.</p>
       <div class="chat" id="chat"><div class="empty" id="chat-empty">Send a message to start.</div></div>
       <label class="f" for="prompt">Message</label>
-      <textarea id="prompt" rows="3" placeholder="Ask something…  (Ctrl+Enter to send)"></textarea>
+      <textarea id="prompt" rows="3" placeholder="Ask something (Ctrl+Enter to send)"></textarea>
       <div class="row end" style="margin-top:8px">
         <button class="btn" id="chat-clear">Clear chat</button>
         <button class="btn danger" id="gen-stop" disabled>Stop</button>
@@ -402,7 +402,7 @@ pre.cmd { background: var(--code); border: 1px solid var(--border); border-radiu
       </div>
       <label class="f" for="adapter-path">Load an adapter <span class="hint">(PEFT folder, adapter_model.safetensors or adapter .gguf)</span></label>
       <div class="row">
-        <input type="text" id="adapter-path" placeholder="workspace/outputs/run-…" style="flex:1">
+        <input type="text" id="adapter-path" placeholder="workspace/outputs/run-..." style="flex:1">
         <button class="btn" id="adapter-load">Load</button>
       </div>
       <div id="adapter-msg" class="notice hidden"></div>
@@ -529,7 +529,7 @@ function renderModel(m) {
   $("#model-empty").classList.toggle("hidden", !!m);
   $("#model-info").classList.toggle("hidden", !m);
   if (!m) { setChip("#chip-model", "", "no model"); renderAdapterChip(); return; }
-  const w = Object.entries(m.weights || {}).map(([k, v]) => `${k} ×${v}`).join(", ");
+  const w = Object.entries(m.weights || {}).map(([k, v]) => `${k} x${v}`).join(", ");
   const t = m.tokenizer || {};
   $("#model-info").innerHTML = [
     ["Name", esc(m.name)], ["Architecture", esc(m.arch)], ["Parameters", m.params_h],
@@ -540,7 +540,7 @@ function renderModel(m) {
     ["Adapter", m.adapter ? `rank ${m.adapter.rank}, alpha ${m.adapter.alpha}, ${fmtBig(m.adapter.params)} params` : "none"],
     ["File", `<span class="mono">${esc(m.path)}</span>`],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-  setChip("#chip-model", "ok", `${m.name} · ${m.params_h} · ${m.device}`);
+  setChip("#chip-model", "ok", `${m.name}, ${m.params_h}, ${m.device}`);
   renderAdapterChip();
 }
 function renderAdapterChip() {
@@ -550,8 +550,8 @@ function renderAdapterChip() {
 async function loadModels() {
   const r = await api("/api/models");
   const sel = $("#model-select"), cur = sel.value;
-  sel.innerHTML = `<option value="">— ${r.models.length ? "select" : "no models found, put .gguf files in the models folder"} —</option>` +
-    r.models.map(m => `<option value="${esc(m.path)}">${esc(m.name)}  ·  ${m.kind}  ·  ${m.size}</option>`).join("");
+  sel.innerHTML = `<option value="">${r.models.length ? "select a model" : "no models found, put .gguf files in the models folder"}</option>` +
+    r.models.map(m => `<option value="${esc(m.path)}">${esc(m.name)} (${m.kind}, ${m.size})</option>`).join("");
   sel.value = cur;
 }
 $("#model-select").onchange = e => { if (e.target.value) $("#model-path").value = e.target.value; };
@@ -585,7 +585,7 @@ $("#model-load").onclick = async () => {
     await api("/api/model/load", { method: "POST", json: { path, device: deviceString(), precision: $("#precision").value } });
     watchTask("#model-task", async res => {
       renderModel(res); toast("Model loaded", "ok"); checkTrainReady();
-      $("#model-task").innerHTML = `Model loaded. <a href="#" data-goto="data">Next: add training data →</a>`;
+      $("#model-task").innerHTML = `Model loaded. <a href="#" data-goto="data">Next: add training data</a>`;
     });
   } catch (e) { toast(e.message, "err"); }
 };
@@ -596,7 +596,7 @@ $("#model-unload").onclick = async () => {
 /* background tasks (model loading, export) */
 function watchTask(boxSel, onDone) {
   const box = $(boxSel);
-  box.className = "notice info"; box.innerHTML = `<span class="spin"></span> starting…`;
+  box.className = "notice info"; box.innerHTML = `<span class="spin"></span> starting`;
   state.taskRunning = true;
   const tick = async () => {
     let t;
@@ -622,14 +622,14 @@ async function uploadData(files) {
   const fd = new FormData();
   for (const f of files) fd.append("files", f, f.name);
   const st = $("#data-upload-status");
-  st.className = "notice info"; st.innerHTML = `<span class="spin"></span> Reading ${files.length} file(s)…`;
+  st.className = "notice info"; st.innerHTML = `<span class="spin"></span> Reading ${files.length} file(s)`;
   try {
     const r = await api("/api/data/upload", { method: "POST", body: fd });
     renderData(r.datasets);
     if (r.errors && r.errors.length) {
       st.className = "notice err";
       st.innerHTML = r.errors.map(e => `<b>${esc(e.file)}</b>: ${esc(e.error)}`).join("<br>");
-    } else { st.className = "notice ok"; st.innerHTML = `Added ${r.added} file(s). <a href="#" data-goto="train">Next: train →</a>`; }
+    } else { st.className = "notice ok"; st.innerHTML = `Added ${r.added} file(s). <a href="#" data-goto="train">Next: train</a>`; }
   } catch (e) { st.className = "notice err"; st.textContent = e.message; }
 }
 $("#paste-add").onclick = async () => {
@@ -644,7 +644,7 @@ function renderData(list) {
   if (!list.length) { box.innerHTML = `<div class="empty">No data yet.</div>`; $("#data-total").textContent = ""; checkTrainReady(); return; }
   const on = list.filter(d => d.enabled);
   const conv = on.reduce((a, d) => a + d.conversations, 0), docs = on.reduce((a, d) => a + d.documents, 0), chars = on.reduce((a, d) => a + d.characters, 0);
-  $("#data-total").textContent = `${conv} Q&A · ${docs} texts · ${fmtBig(chars)} characters`;
+  $("#data-total").textContent = `${conv} Q&A, ${docs} texts, ${fmtBig(chars)} characters`;
   box.innerHTML = list.map(d => {
     const what = d.conversations ? `${d.conversations} Q&A examples` : `${d.documents} text${d.documents === 1 ? "" : "s"}`;
     const mapping = d.content === "records" ? mappingEditor(d) : "";
@@ -654,7 +654,7 @@ function renderData(list) {
     return `<div class="ds ${d.enabled ? "" : "off"}" data-id="${d.id}">
       <div class="ds-head">
         <span class="badge k">${esc(d.kind)}</span><span class="ds-name">${esc(d.name)}</span>
-        <span class="ds-stats">${what} · ${fmtBig(d.characters)} chars</span>
+        <span class="ds-stats">${what}, ${fmtBig(d.characters)} chars</span>
         <span class="right row" style="gap:6px">
           <label class="checks" title="Use this dataset for training"><input type="checkbox" data-act="toggle" ${d.enabled ? "checked" : ""}>use</label>
           <button class="btn small" data-act="sample" title="Show how the model sees the first example">Preview</button>
@@ -700,7 +700,7 @@ $("#data-list").addEventListener("click", async e => {
       const q = new URLSearchParams({ template: $("#t-chat_template").value, system: $("#t-system_prompt").value });
       const r = await api(`/api/data/${id}/sample?` + q);
       const html = r.parts.map(p => p.train ? `<mark>${esc(p.text)}</mark>` : esc(p.text)).join("");
-      card.querySelector(".sample-box").innerHTML = `<div class="muted" style="margin:8px 0 4px;font-size:13px">Format: <b>${esc(r.template)}</b> · ${r.tokens} tokens, ${r.trained_tokens} trained (<mark>highlighted</mark>)</div><div class="sample">${html}</div>`;
+      card.querySelector(".sample-box").innerHTML = `<div class="muted" style="margin:8px 0 4px;font-size:13px">Format: <b>${esc(r.template)}</b>, ${r.tokens} tokens, ${r.trained_tokens} trained (<mark>highlighted</mark>)</div><div class="sample">${html}</div>`;
     }
   } catch (err) { toast(err.message, "err"); }
 });
@@ -747,11 +747,11 @@ $("#train-start").onclick = async () => {
     state.history = []; state.evals = []; state.histLen = 0; state.logsLen = 0; $("#train-log").textContent = "";
     $("#train-out").classList.add("hidden");
     const r = await api("/api/train/start", { method: "POST", json: cfg });
-    toast("Training started → " + r.output_dir, "ok");
+    toast("Training started, output: " + r.output_dir, "ok");
     pollTrain();
   } catch (e) { toast(e.message, "err", 8000); }
 };
-$("#train-stop").onclick = async () => { try { await api("/api/train/stop", { method: "POST" }); toast("Stopping after the current step…"); } catch (e) { toast(e.message, "err"); } };
+$("#train-stop").onclick = async () => { try { await api("/api/train/stop", { method: "POST" }); toast("Stopping after the current step"); } catch (e) { toast(e.message, "err"); } };
 let trainTimer = null;
 async function pollTrain() {
   clearTimeout(trainTimer);
@@ -780,7 +780,7 @@ async function pollTrain() {
   $("#s-elapsed").textContent = fmtTime(s.elapsed_secs);
   $("#s-eta").textContent = active ? fmtTime(s.eta_secs) : "–";
   const cls = s.state === "failed" ? "err" : active ? "busy" : s.state === "finished" ? "ok" : s.state === "stopped" ? "warn" : "";
-  setChip("#chip-train", cls, active ? `training ${s.total_steps ? Math.round(100 * s.step / s.total_steps) + "%" : "…"}` : s.state);
+  setChip("#chip-train", cls, active ? `training ${s.total_steps ? Math.round(100 * s.step / s.total_steps) + "%" : ""}` : s.state);
   if (prevActive && !active) {
     if (s.state === "failed") toast("Training failed: " + s.message, "err", 12000);
     else {
@@ -844,7 +844,7 @@ $("#chart").addEventListener("mousemove", e => {
   const i = state.history.findIndex(p => p.step >= step); const p = state.history[i < 0 ? state.history.length - 1 : i];
   if (!p) return;
   tip.style.display = "block";
-  tip.innerHTML = `step ${p.step} · loss ${p.loss.toFixed(4)} · lr ${p.lr.toExponential(2)} · grad ${p.grad_norm.toFixed(2)}`;
+  tip.innerHTML = `step ${p.step}  loss ${p.loss.toFixed(4)}  lr ${p.lr.toExponential(2)}  grad ${p.grad_norm.toFixed(2)}`;
   tip.style.left = Math.min(mx + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
 });
 $("#chart").addEventListener("mouseleave", () => $("#chart-tip").style.display = "none");
@@ -889,12 +889,12 @@ async function send() {
         if (ev.error) throw new Error(ev.error);
         if (ev.done) {
           const s = ev.stats;
-          $("#gen-stats").textContent = `${s.prompt_tokens} prompt tokens (${s.prompt_secs.toFixed(2)} s) · ${s.generated_tokens} new tokens at ${s.tokens_per_sec.toFixed(1)} tok/s · stopped by ${s.stop_reason}`;
+          $("#gen-stats").textContent = `${s.prompt_tokens} prompt tokens (${s.prompt_secs.toFixed(2)} s), ${s.generated_tokens} new tokens at ${s.tokens_per_sec.toFixed(1)} tok/s, stopped by ${s.stop_reason}`;
         }
       }
     }
     state.chat.push([prompt, text]);
-  } catch (e) { bot.textContent = text + (text ? "\n" : "") + "⚠ " + e.message; bot.style.color = "var(--err)"; }
+  } catch (e) { bot.textContent = text + (text ? "\n" : "") + "Error: " + e.message; bot.style.color = "var(--err)"; }
   state.generating = false; $("#gen-send").disabled = false; $("#gen-stop").disabled = true;
 }
 $("#gen-send").onclick = send;
@@ -913,7 +913,7 @@ $("#adapter-load").onclick = async () => {
   catch (e) { adapterMsg(esc(e.message), "err"); }
 };
 $("#adapter-remove").onclick = async () => {
-  try { await api("/api/adapter/remove", { method: "POST" }); adapterMsg("Adapter removed — the model is back to its original weights.", "info"); refreshModel(); }
+  try { await api("/api/adapter/remove", { method: "POST" }); adapterMsg("Adapter removed, the model is back to its original weights.", "info"); refreshModel(); }
   catch (e) { adapterMsg(esc(e.message), "err"); }
 };
 $("#ex-kind").onchange = () => { $("#ex-quant").disabled = $("#ex-kind").value !== "merged_gguf"; };
@@ -922,7 +922,7 @@ $("#ex-go").onclick = async () => {
     await api("/api/export", { method: "POST", json: { kind: $("#ex-kind").value, quant: $("#ex-quant").value, name: $("#ex-name").value } });
     watchTask("#ex-task", res => {
       const box = $("#ex-task");
-      box.innerHTML = `Exported <span class="mono">${esc(res.path)}</span>` + (res.download && !$("#ex-kind").value.includes("safetensors") ? ` — <a href="/api/download/${encodeURI(res.download)}">download</a>` : "");
+      box.innerHTML = `Exported <span class="mono">${esc(res.path)}</span>` + (res.download && !$("#ex-kind").value.includes("safetensors") ? ` <a href="/api/download/${encodeURI(res.download)}">download</a>` : "");
       loadFiles();
     });
   } catch (e) { toast(e.message, "err"); }
@@ -933,7 +933,7 @@ async function loadFiles() {
     $("#files-root").textContent = r.root;
     $("#files").innerHTML = r.files.length ? r.files.map(f => `<tr><td class="path mono">${esc(f.path)}</td><td class="muted">${f.size}</td>
       <td style="text-align:right;white-space:nowrap">${/adapter(_model\.safetensors|\.gguf)$/.test(f.path) ? `<button class="btn small" data-useadapter="${esc(f.path)}">Load</button> ` : ""}<a class="btn small" style="text-decoration:none" href="/api/download/${encodeURI(f.path)}">Download</a></td></tr>`).join("")
-      : `<tr><td class="muted">Nothing yet — train a model or export one.</td></tr>`;
+      : `<tr><td class="muted">Nothing here yet.</td></tr>`;
   } catch (e) { toast(e.message, "err"); }
 }
 $("#files-refresh").onclick = loadFiles;

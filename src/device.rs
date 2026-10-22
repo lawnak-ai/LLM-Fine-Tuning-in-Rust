@@ -1,4 +1,4 @@
-//! CPU / GPU device selection.
+//! Device selection (CPU / CUDA / Metal).
 
 use anyhow::{bail, Result};
 use candle_core::Device;
@@ -107,9 +107,15 @@ mod tests {
     #[test]
     fn parse_devices() {
         assert_eq!(DeviceChoice::parse("cpu").unwrap(), DeviceChoice::Cpu);
-        assert_eq!(DeviceChoice::parse("CUDA:1").unwrap(), DeviceChoice::Cuda(1));
+        assert_eq!(
+            DeviceChoice::parse("CUDA:1").unwrap(),
+            DeviceChoice::Cuda(1)
+        );
         assert_eq!(DeviceChoice::parse("gpu").unwrap(), DeviceChoice::Cuda(0));
-        assert_eq!(DeviceChoice::parse("metal").unwrap(), DeviceChoice::Metal(0));
+        assert_eq!(
+            DeviceChoice::parse("metal").unwrap(),
+            DeviceChoice::Metal(0)
+        );
         assert_eq!(DeviceChoice::parse("").unwrap(), DeviceChoice::Auto);
         assert!(DeviceChoice::parse("tpu").is_err());
     }

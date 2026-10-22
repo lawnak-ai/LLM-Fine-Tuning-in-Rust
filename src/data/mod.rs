@@ -1,4 +1,4 @@
-//! Datasets: uploaded files, column mapping, and conversion into training samples.
+//! Datasets, column mapping and building training samples.
 
 pub mod extract;
 
@@ -22,16 +22,41 @@ pub struct ColumnMapping {
     pub text: Vec<String>,
 }
 
-const PROMPT_COLS: &[&str] = &["instruction", "prompt", "question", "query", "user", "human", "request", "q", "input_text", "problem"];
+const PROMPT_COLS: &[&str] = &[
+    "instruction",
+    "prompt",
+    "question",
+    "query",
+    "user",
+    "human",
+    "request",
+    "q",
+    "input_text",
+    "problem",
+];
 const INPUT_COLS: &[&str] = &["input", "context"];
-const RESPONSE_COLS: &[&str] = &["output", "response", "answer", "completion", "assistant", "gpt", "target", "reply", "a", "chosen", "solution"];
+const RESPONSE_COLS: &[&str] = &[
+    "output",
+    "response",
+    "answer",
+    "completion",
+    "assistant",
+    "gpt",
+    "target",
+    "reply",
+    "a",
+    "chosen",
+    "solution",
+];
 const SYSTEM_COLS: &[&str] = &["system", "system_prompt"];
 const TEXT_COLS: &[&str] = &["text", "content", "body", "document", "passage", "article"];
 
 fn find_col(columns: &[String], names: &[&str], exclude: &[&Option<String>]) -> Option<String> {
     for n in names {
         for c in columns {
-            if c.trim().eq_ignore_ascii_case(n) && !exclude.iter().any(|e| e.as_deref() == Some(c.as_str())) {
+            if c.trim().eq_ignore_ascii_case(n)
+                && !exclude.iter().any(|e| e.as_deref() == Some(c.as_str()))
+            {
                 return Some(c.clone());
             }
         }
@@ -122,10 +147,16 @@ impl Dataset {
     /// Plain text documents and conversations according to the mapping.
     pub fn examples(&self) -> (Vec<String>, Vec<Conversation>) {
         match &self.content {
-            Extracted::Text(t) => (t.iter().filter(|s| !s.trim().is_empty()).cloned().collect(), vec![]),
+            Extracted::Text(t) => (
+                t.iter().filter(|s| !s.trim().is_empty()).cloned().collect(),
+                vec![],
+            ),
             Extracted::Conversations(c) => (vec![], c.clone()),
             Extracted::Records { columns, rows } => {
-                let idx = |name: &Option<String>| name.as_ref().and_then(|n| columns.iter().position(|c| c == n));
+                let idx = |name: &Option<String>| {
+                    name.as_ref()
+                        .and_then(|n| columns.iter().position(|c| c == n))
+                };
                 let m = &self.mapping;
                 if let (Some(p), Some(r)) = (idx(&m.prompt), idx(&m.response)) {
                     let inp = idx(&m.input);
@@ -143,13 +174,23 @@ impl Dataset {
                         if prompt.is_empty() || resp.is_empty() {
                             continue;
                         }
-                        let system = sys.map(|s| row[s].trim().to_string()).filter(|s| !s.is_empty());
+                        let system = sys
+                            .map(|s| row[s].trim().to_string())
+                            .filter(|s| !s.is_empty());
                         convs.push(Conversation::single(system, prompt, Some(resp)));
                     }
                     (vec![], convs)
                 } else {
-                    let cols: Vec<usize> = m.text.iter().filter_map(|t| columns.iter().position(|c| c == t)).collect();
-                    let cols = if cols.is_empty() { (0..columns.len()).collect() } else { cols };
+                    let cols: Vec<usize> = m
+                        .text
+                        .iter()
+                        .filter_map(|t| columns.iter().position(|c| c == t))
+                        .collect();
+                    let cols = if cols.is_empty() {
+                        (0..columns.len()).collect()
+                    } else {
+                        cols
+                    };
                     let texts = rows
                         .iter()
                         .map(|row| {
@@ -176,7 +217,14 @@ impl Dataset {
         let characters = texts.iter().map(|t| t.chars().count()).sum::<usize>()
             + convs
                 .iter()
-                .map(|c| c.turns.iter().map(|(u, a)| u.chars().count() + a.as_ref().map(|a| a.chars().count()).unwrap_or(0)).sum::<usize>())
+                .map(|c| {
+                    c.turns
+                        .iter()
+                        .map(|(u, a)| {
+                            u.chars().count() + a.as_ref().map(|a| a.chars().count()).unwrap_or(0)
+                        })
+                        .sum::<usize>()
+                })
                 .sum::<usize>();
         let mut preview = vec![];
         for c in convs.iter().take(3) {
@@ -212,7 +260,7 @@ fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!("{}…", s.chars().take(n).collect::<String>())
+        format!("{}...", s.chars().take(n).collect::<String>())
     }
 }
 
@@ -258,7 +306,11 @@ pub struct BuildStats {
     pub target_tokens: usize,
 }
 
-pub fn build_samples(datasets: &[Dataset], tok: &Tokenizer, opt: &SampleOptions) -> Result<(Vec<Sample>, BuildStats)> {
+pub fn build_samples(
+    datasets: &[Dataset],
+    tok: &Tokenizer,
+    opt: &SampleOptions,
+) -> Result<(Vec<Sample>, BuildStats)> {
     if opt.max_len < 8 {
         bail!("max sequence length must be at least 8");
     }
@@ -335,8 +387,8 @@ pub fn build_samples(datasets: &[Dataset], tok: &Tokenizer, opt: &SampleOptions)
     Ok((samples, stats))
 }
 
-/// Shorten an over-long chat sample. Cutting the end keeps the whole prompt; when that would
-/// leave less than a quarter of the answer, drop prompt tokens after the first one instead.
+/// Shorten a sample that is too long. Normally cut the end, but if that loses most of
+/// the answer, drop prompt tokens (after BOS) instead.
 fn truncate_sample(ids: &mut Vec<u32>, mask: &mut Vec<bool>, max_len: usize) {
     let trained = mask.iter().filter(|m| **m).count();
     let kept_by_cut = mask[..max_len].iter().filter(|m| **m).count();
@@ -352,7 +404,11 @@ fn truncate_sample(ids: &mut Vec<u32>, mask: &mut Vec<bool>, max_len: usize) {
 }
 
 /// Split off an evaluation set.
-pub fn split_eval(mut samples: Vec<Sample>, fraction: f64, seed: u64) -> (Vec<Sample>, Vec<Sample>) {
+pub fn split_eval(
+    mut samples: Vec<Sample>,
+    fraction: f64,
+    seed: u64,
+) -> (Vec<Sample>, Vec<Sample>) {
     if fraction <= 0.0 || samples.len() < 4 {
         return (samples, vec![]);
     }
@@ -389,7 +445,9 @@ mod tests {
     fn truncation_keeps_the_answer() {
         // BOS, 6 prompt tokens, 3 answer tokens; limit 6 -> prompt is shortened after BOS.
         let mut ids: Vec<u32> = (0..10).collect();
-        let mut mask = vec![false, false, false, false, false, false, false, true, true, true];
+        let mut mask = vec![
+            false, false, false, false, false, false, false, true, true, true,
+        ];
         truncate_sample(&mut ids, &mut mask, 6);
         assert_eq!(ids, vec![0, 5, 6, 7, 8, 9]);
         assert_eq!(mask.iter().filter(|m| **m).count(), 3);

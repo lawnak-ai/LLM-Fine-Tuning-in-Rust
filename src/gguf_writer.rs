@@ -1,5 +1,5 @@
-//! Streaming GGUF v3 writer: tensors are produced one at a time, so exporting a
-//! merged model never needs a second copy of the whole model in memory.
+//! GGUF v3 writer. Tensors are written one at a time so a merged export doesn't
+//! need a second copy of the model in memory.
 
 use std::io::{Seek, Write};
 use std::path::Path;
@@ -154,7 +154,12 @@ pub fn write_gguf(
     for p in plans {
         let elems: usize = p.dims.iter().product();
         if elems % p.dtype.block_size() != 0 {
-            bail!("tensor {} has {} elements, not a multiple of the {:?} block size", p.name, elems, p.dtype);
+            bail!(
+                "tensor {} has {} elements, not a multiple of the {:?} block size",
+                p.name,
+                elems,
+                p.dtype
+            );
         }
         write_str(&mut w, &p.name)?;
         w.write_all(&(p.dims.len() as u32).to_le_bytes())?;
@@ -170,7 +175,12 @@ pub fn write_gguf(
     for (i, p) in plans.iter().enumerate() {
         let data = produce(i)?;
         if data.len() != p.nbytes() {
-            bail!("tensor {}: produced {} bytes, expected {}", p.name, data.len(), p.nbytes());
+            bail!(
+                "tensor {}: produced {} bytes, expected {}",
+                p.name,
+                data.len(),
+                p.nbytes()
+            );
         }
         w.write_all(&data)?;
         pad_to(&mut w, align)?;

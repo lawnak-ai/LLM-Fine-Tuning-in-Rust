@@ -1,25 +1,28 @@
-//! Fused operations with hand-written backward passes.
-//!
-//! candle's autograd differentiates RMSNorm, RoPE and softmax through a dozen
-//! elementwise primitives each. Here the forward pass uses candle's fused
-//! kernels (CPU, CUDA and Metal) and the backward pass uses the closed-form
-//! gradient. [`ManualGrad`] is the bridge: it copies the already computed
-//! output and tells autograd how to map the output gradient to the input.
+//! Fused ops (RMSNorm, RoPE, softmax, linear) with hand-written backward passes,
+//! plus the cross-entropy used for the LM head. The forward pass uses candle's
+//! fused kernels and `ManualGrad` hooks the closed-form gradient into autograd.
 
 use candle_core::backend::BackendStorage;
-use candle_core::{CpuStorage, CudaStorage, CustomOp2, DType, Layout, MetalStorage, Result, Shape, Tensor, D};
+use candle_core::{
+    CpuStorage, CudaStorage, CustomOp2, DType, Layout, MetalStorage, Result, Shape, Tensor, D,
+};
 
 use super::linear::FrozenWeight;
 
 #[derive(Clone)]
 pub enum Backward {
-    /// y = x · Wᵀ  ⇒  dx = g · W
+    /// y = x W^T, dx = g W
     Linear(FrozenWeight),
-    /// y = rope(x)  ⇒  dx = rope⁻¹(g)
-    Rope { cos: Tensor, sin: Tensor, interleaved: bool },
-    /// y = x · r · w with r = 1/√(mean(x²)+ε)  ⇒  dx = r·gw − x·r³·mean(gw·x)
+    /// y = rope(x), dx = inverse rotation of g
+    Rope {
+        cos: Tensor,
+        sin: Tensor,
+        interleaved: bool,
+    },
+    /// y = x * r * w, r = 1/sqrt(mean(x^2) + eps)
+    /// dx = r * gw - x * r^3 * mean(gw * x)
     RmsNorm { w: Tensor, eps: f64 },
-    /// y = softmax(x)  ⇒  dx = y ⊙ (g − Σ g·y)
+    /// y = softmax(x), dx = y * (g - sum(g * y))
     Softmax,
 }
 
@@ -37,25 +40,53 @@ impl CustomOp2 for ManualGrad {
         "manual-grad"
     }
 
-    fn cpu_fwd(&self, _: &CpuStorage, _: &Layout, s2: &CpuStorage, l2: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn cpu_fwd(
+        &self,
+        _: &CpuStorage,
+        _: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
         ensure_fresh(l2)?;
         Ok((s2.try_clone(l2)?, l2.shape().clone()))
     }
 
-    fn cuda_fwd(&self, _: &CudaStorage, _: &Layout, s2: &CudaStorage, l2: &Layout) -> Result<(CudaStorage, Shape)> {
+    fn cuda_fwd(
+        &self,
+        _: &CudaStorage,
+        _: &Layout,
+        s2: &CudaStorage,
+        l2: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
         ensure_fresh(l2)?;
         Ok((s2.try_clone(l2)?, l2.shape().clone()))
     }
 
-    fn metal_fwd(&self, _: &MetalStorage, _: &Layout, s2: &MetalStorage, l2: &Layout) -> Result<(MetalStorage, Shape)> {
+    fn metal_fwd(
+        &self,
+        _: &MetalStorage,
+        _: &Layout,
+        s2: &MetalStorage,
+        l2: &Layout,
+    ) -> Result<(MetalStorage, Shape)> {
         ensure_fresh(l2)?;
         Ok((s2.try_clone(l2)?, l2.shape().clone()))
     }
 
-    fn bwd(&self, x: &Tensor, _y: &Tensor, res: &Tensor, g: &Tensor) -> Result<(Option<Tensor>, Option<Tensor>)> {
+    fn bwd(
+        &self,
+        x: &Tensor,
+        _y: &Tensor,
+        res: &Tensor,
+        g: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
         let dx = match &self.0 {
             Backward::Linear(w) => w.backward_input(g)?,
-            Backward::Rope { cos, sin, interleaved } => {
+            Backward::Rope {
+                cos,
+                sin,
+                interleaved,
+            } => {
                 let g = g.contiguous()?;
                 let neg = sin.neg()?;
                 if *interleaved {
@@ -66,11 +97,14 @@ impl CustomOp2 for ManualGrad {
             }
             Backward::RmsNorm { w, eps } => {
                 let x = x.detach();
-                let r = (x.sqr()?.mean_keepdim(D::Minus1)? + *eps)?.sqrt()?.recip()?;
+                let r = (x.sqr()?.mean_keepdim(D::Minus1)? + *eps)?
+                    .sqrt()?
+                    .recip()?;
                 let gw = g.broadcast_mul(w)?;
                 let dot = gw.mul(&x)?.mean_keepdim(D::Minus1)?;
                 let r3 = r.sqr()?.mul(&r)?;
-                gw.broadcast_mul(&r)?.sub(&x.broadcast_mul(&dot.mul(&r3)?)?)?
+                gw.broadcast_mul(&r)?
+                    .sub(&x.broadcast_mul(&dot.mul(&r3)?)?)?
             }
             Backward::Softmax => {
                 let y = res.detach();
@@ -110,12 +144,24 @@ pub fn rope(x: &Tensor, cos: &Tensor, sin: &Tensor, interleaved: bool) -> Result
     } else {
         candle_nn::rotary_emb::rope(&xd, &cos, &sin)?
     };
-    attach(x, y, Backward::Rope { cos, sin, interleaved })
+    attach(
+        x,
+        y,
+        Backward::Rope {
+            cos,
+            sin,
+            interleaved,
+        },
+    )
 }
 
 /// Summed cross-entropy of `logits` (rows, vocab) against `targets` and its gradient
-/// with respect to the logits (softmax − one-hot). Multi-threaded on CPU.
-pub fn cross_entropy_with_grad(logits: &Tensor, targets: &[u32], want_grad: bool) -> Result<(f64, Option<Tensor>)> {
+/// w.r.t. the logits (softmax - onehot).
+pub fn cross_entropy_with_grad(
+    logits: &Tensor,
+    targets: &[u32],
+    want_grad: bool,
+) -> Result<(f64, Option<Tensor>)> {
     let (rows, vocab) = logits.dims2()?;
     let logits = logits.to_dtype(DType::F32)?.contiguous()?;
     if logits.device().is_cpu() {
@@ -126,7 +172,6 @@ pub fn cross_entropy_with_grad(logits: &Tensor, targets: &[u32], want_grad: bool
             .zip(targets.par_iter())
             .map(|(row, &t)| {
                 let m = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                // exp() of very negative numbers is slow (subnormal results) and adds nothing.
                 let mut s = 0f64;
                 for &v in row.iter() {
                     let d = v - m;
@@ -137,8 +182,7 @@ pub fn cross_entropy_with_grad(logits: &Tensor, targets: &[u32], want_grad: bool
                 let lse = m as f64 + s.ln();
                 let loss = lse - row[t as usize] as f64;
                 if want_grad {
-                    // Probabilities below e^-69 (~1e-30) are flushed to zero: as subnormal f32 values
-                    // they would make the following matrix product an order of magnitude slower.
+                    // flush tiny probs to 0, denormals make the next matmul ~10x slower
                     for v in row.iter_mut() {
                         let d = (*v as f64 - lse) as f32;
                         *v = if d < -69.0 { 0.0 } else { d.exp() };
@@ -148,7 +192,11 @@ pub fn cross_entropy_with_grad(logits: &Tensor, targets: &[u32], want_grad: bool
                 loss
             })
             .sum();
-        let grad = if want_grad { Some(Tensor::from_vec(data, (rows, vocab), logits.device())?) } else { None };
+        let grad = if want_grad {
+            Some(Tensor::from_vec(data, (rows, vocab), logits.device())?)
+        } else {
+            None
+        };
         return Ok((nll, grad));
     }
     let dev = logits.device();
@@ -177,24 +225,49 @@ mod tests {
     fn rand(shape: &[usize], seed: u64) -> Tensor {
         let mut r = crate::util::Rng::new(seed);
         let n: usize = shape.iter().product();
-        Tensor::from_vec((0..n).map(|_| r.normal()).collect::<Vec<f32>>(), shape, &Device::Cpu).unwrap()
+        Tensor::from_vec(
+            (0..n).map(|_| r.normal()).collect::<Vec<f32>>(),
+            shape,
+            &Device::Cpu,
+        )
+        .unwrap()
     }
 
     /// Compare a fused op's gradient with autograd through the primitive version.
-    fn check(f_fused: impl Fn(&Tensor) -> Tensor, f_ref: impl Fn(&Tensor) -> Tensor, shape: &[usize]) {
+    fn check(
+        f_fused: impl Fn(&Tensor) -> Tensor,
+        f_ref: impl Fn(&Tensor) -> Tensor,
+        shape: &[usize],
+    ) {
         let x = rand(shape, 1);
         let g = rand(shape, 2);
         let a = Var::from_tensor(&x).unwrap();
         let b = Var::from_tensor(&x).unwrap();
         let ya = f_fused(a.as_tensor());
         let yb = f_ref(b.as_tensor());
-        let fwd = ya.sub(&yb).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+        let fwd = ya
+            .sub(&yb)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .max_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
         assert!(fwd < 1e-4, "forward differs by {fwd}");
         let ga = ya.mul(&g).unwrap().sum_all().unwrap().backward().unwrap();
         let gb = yb.mul(&g).unwrap().sum_all().unwrap().backward().unwrap();
         let da = ga.get(a.as_tensor()).unwrap();
         let db = gb.get(b.as_tensor()).unwrap();
-        let diff = da.sub(db).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+        let diff = da
+            .sub(db)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .max_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
         assert!(diff < 1e-4, "gradient differs by {diff}");
     }
 
@@ -205,7 +278,10 @@ mod tests {
             |x| rms_norm(x, &w, 1e-5).unwrap(),
             |x| {
                 let v = x.sqr().unwrap().mean_keepdim(D::Minus1).unwrap();
-                x.broadcast_div(&(v + 1e-5).unwrap().sqrt().unwrap()).unwrap().broadcast_mul(&w).unwrap()
+                x.broadcast_div(&(v + 1e-5).unwrap().sqrt().unwrap())
+                    .unwrap()
+                    .broadcast_mul(&w)
+                    .unwrap()
             },
             &[2, 3, 8],
         );
@@ -213,7 +289,11 @@ mod tests {
 
     #[test]
     fn softmax_grad() {
-        check(|x| softmax_last(x).unwrap(), |x| candle_nn::ops::softmax(x, D::Minus1).unwrap(), &[2, 3, 7]);
+        check(
+            |x| softmax_last(x).unwrap(),
+            |x| candle_nn::ops::softmax(x, D::Minus1).unwrap(),
+            &[2, 3, 7],
+        );
     }
 
     #[test]
@@ -252,11 +332,30 @@ mod tests {
         let (nll, grad) = cross_entropy_with_grad(&logits, &targets, true).unwrap();
         let v = Var::from_tensor(&logits).unwrap();
         let lp = candle_nn::ops::log_softmax(v.as_tensor(), D::Minus1).unwrap();
-        let tgt = Tensor::new(&targets, &Device::Cpu).unwrap().unsqueeze(1).unwrap();
-        let loss = lp.gather(&tgt, 1).unwrap().neg().unwrap().sum_all().unwrap();
+        let tgt = Tensor::new(&targets, &Device::Cpu)
+            .unwrap()
+            .unsqueeze(1)
+            .unwrap();
+        let loss = lp
+            .gather(&tgt, 1)
+            .unwrap()
+            .neg()
+            .unwrap()
+            .sum_all()
+            .unwrap();
         assert!((loss.to_scalar::<f32>().unwrap() as f64 - nll).abs() < 1e-4);
         let g = loss.backward().unwrap();
-        let diff = g.get(v.as_tensor()).unwrap().sub(&grad.unwrap()).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+        let diff = g
+            .get(v.as_tensor())
+            .unwrap()
+            .sub(&grad.unwrap())
+            .unwrap()
+            .abs()
+            .unwrap()
+            .max_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
         assert!(diff < 1e-5, "{diff}");
     }
 }

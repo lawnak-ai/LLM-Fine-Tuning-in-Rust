@@ -12,14 +12,24 @@ use candle_core::quantized::QTensor;
 use candle_core::{DType, Device};
 use llm_finetune::data::Sample;
 use llm_finetune::model::load::BasePrecision;
-use llm_finetune::model::{Embedding, FrozenWeight, LoraConfig, Model, ModelConfig, Proj, RopeStyle};
+use llm_finetune::model::{
+    Embedding, FrozenWeight, LoraConfig, Model, ModelConfig, Proj, RopeStyle,
+};
 use llm_finetune::train::compute_gradients;
 
 fn peak_rss_mb() -> f64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with("VmHWM")).map(|l| l.to_string()))
-        .and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse::<f64>().ok()))
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM"))
+                .map(|l| l.to_string())
+        })
+        .and_then(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<f64>().ok())
+        })
         .map(|kb| kb / 1024.0)
         .unwrap_or(0.0)
 }
@@ -78,7 +88,15 @@ fn main() -> Result<()> {
         model.embed = Embedding::Quant(q.clone());
     }
     model.lm_head.weight = head;
-    model.attach_lora(LoraConfig { rank: 16, alpha: 32.0, dropout: 0.0, targets: Proj::ALL.to_vec() }, 1)?;
+    model.attach_lora(
+        LoraConfig {
+            rank: 16,
+            alpha: 32.0,
+            dropout: 0.0,
+            targets: Proj::ALL.to_vec(),
+        },
+        1,
+    )?;
     eprintln!(
         "{preset}: {} params, weights {:.0} MB ({precision:?}), built in {:.1}s, {} threads",
         model.num_params(),
@@ -86,7 +104,10 @@ fn main() -> Result<()> {
         t0.elapsed().as_secs_f64(),
         candle_core::utils::get_num_threads()
     );
-    let sample = Sample { ids: (0..seq as u32).map(|i| (i * 7919) % vocab as u32).collect(), mask: vec![true; seq] };
+    let sample = Sample {
+        ids: (0..seq as u32).map(|i| (i * 7919) % vocab as u32).collect(),
+        mask: vec![true; seq],
+    };
     for ckpt in [true, false] {
         let mut best = f64::MAX;
         for _ in 0..steps {

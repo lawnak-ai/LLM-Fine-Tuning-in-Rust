@@ -1,4 +1,4 @@
-//! Web server: serves the single-page UI and a JSON API.
+//! HTTP server: the UI page and the JSON API.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -67,7 +67,11 @@ pub struct ApiError(anyhow::Error);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (StatusCode::BAD_REQUEST, Json(json!({"error": format!("{:#}", self.0)}))).into_response()
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("{:#}", self.0)})),
+        )
+            .into_response()
     }
 }
 
@@ -102,7 +106,7 @@ impl AppState {
         let inner = self.inner.lock().unwrap();
         match (&inner.model, &inner.tokenizer) {
             (Some(m), Some(t)) => Ok((m.clone(), t.clone())),
-            _ => bail!("no model loaded — load a model first"),
+            _ => bail!("no model loaded"),
         }
     }
 
@@ -120,7 +124,13 @@ impl AppState {
             if t.running {
                 bail!("'{}' is still running", t.name);
             }
-            *t = TaskStatus { name: name.to_string(), running: true, message: "starting…".into(), error: None, result: None };
+            *t = TaskStatus {
+                name: name.to_string(),
+                running: true,
+                message: "starting".into(),
+                error: None,
+                result: None,
+            };
         }
         let task = self.task.clone();
         std::thread::spawn(move || {
@@ -142,7 +152,7 @@ impl AppState {
                 }
                 Err(_) => {
                     t.message = "failed".into();
-                    t.error = Some("internal error (panic) — see the server log".into());
+                    t.error = Some("internal error, see the server log".into());
                 }
             }
         });
@@ -163,7 +173,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/data", get(api_data_list))
         .route("/api/data/upload", post(api_data_upload))
         .route("/api/data/text", post(api_data_text))
-        .route("/api/data/{id}", patch(api_data_update).delete(api_data_delete))
+        .route(
+            "/api/data/{id}",
+            patch(api_data_update).delete(api_data_delete),
+        )
         .route("/api/data/{id}/sample", get(api_data_sample))
         .route("/api/train/start", post(api_train_start))
         .route("/api/train/stop", post(api_train_stop))
@@ -183,7 +196,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 pub async fn serve(state: Arc<AppState>, addr: SocketAddr) -> anyhow::Result<()> {
     let app = router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("cannot listen on {addr}"))?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("cannot listen on {addr}"))?;
     eprintln!("\n  LLM Fine-Tuning Studio is running:  http://{addr}\n");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -215,21 +230,35 @@ async fn api_task(State(st): St) -> Json<TaskStatus> {
 }
 
 fn scan_models(dir: &FsPath, depth: usize, out: &mut Vec<Value>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
             if p.join("config.json").exists() && p.join("tokenizer.json").exists() {
                 let size: u64 = std::fs::read_dir(&p)
-                    .map(|r| r.filter_map(|e| e.ok()).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+                    .map(|r| {
+                        r.filter_map(|e| e.ok())
+                            .filter_map(|e| e.metadata().ok())
+                            .map(|m| m.len())
+                            .sum()
+                    })
                     .unwrap_or(0);
                 out.push(json!({"path": p.display().to_string(), "name": p.file_name().map(|n| n.to_string_lossy().to_string()), "kind": "safetensors", "size": human_bytes(size)}));
             } else if depth > 0 {
                 scan_models(&p, depth - 1, out);
             }
-        } else if p.extension().map(|e| e.eq_ignore_ascii_case("gguf")).unwrap_or(false) {
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        } else if p
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("gguf"))
+            .unwrap_or(false)
+        {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             if name.contains("adapter") || name.ends_with(".part") {
                 continue;
             }
@@ -251,11 +280,18 @@ async fn api_models(State(st): St) -> Json<Value> {
 async fn api_model_upload(State(st): St, mut mp: Multipart) -> ApiResult<Json<Value>> {
     let mut saved = vec![];
     while let Some(mut field) = mp.next_field().await? {
-        let Some(name) = field.file_name().map(sanitize_file_name) else { continue };
+        let Some(name) = field.file_name().map(sanitize_file_name) else {
+            continue;
+        };
         let lower = name.to_ascii_lowercase();
-        let ok = [".gguf", ".safetensors", ".json", ".model", ".txt", ".jinja"].iter().any(|e| lower.ends_with(e));
+        let ok = [".gguf", ".safetensors", ".json", ".model", ".txt", ".jinja"]
+            .iter()
+            .any(|e| lower.ends_with(e));
         if !ok {
-            return Err(anyhow!("'{name}': upload a .gguf file (or the files of a Hugging Face model folder)").into());
+            return Err(anyhow!(
+                "'{name}': upload a .gguf file (or the files of a Hugging Face model folder)"
+            )
+            .into());
         }
         let path = st.models_dir.join(&name);
         let tmp = st.models_dir.join(format!("{name}.part"));
@@ -304,7 +340,11 @@ fn model_info(model: &Model, tok: &Tokenizer, path: &FsPath, precision: &str) ->
 
 fn refresh_model_info(st: &AppState) {
     let mut inner = st.inner.lock().unwrap();
-    let (Some(m), Some(t), Some(info)) = (inner.model.clone(), inner.tokenizer.clone(), inner.model_info.clone()) else {
+    let (Some(m), Some(t), Some(info)) = (
+        inner.model.clone(),
+        inner.tokenizer.clone(),
+        inner.model_info.clone(),
+    ) else {
         return;
     };
     let path = PathBuf::from(info["path"].as_str().unwrap_or(""));
@@ -337,7 +377,11 @@ async fn api_model_load(State(st): St, Json(req): Json<LoadReq>) -> ApiResult<Js
     let path = PathBuf::from(req.path.trim());
     let choice = DeviceChoice::parse(&req.device)?;
     let precision = BasePrecision::parse(&req.precision)?;
-    let prec_name = if req.precision.is_empty() { "auto".to_string() } else { req.precision.clone() };
+    let prec_name = if req.precision.is_empty() {
+        "auto".to_string()
+    } else {
+        req.precision.clone()
+    };
     let st2 = st.clone();
     st.spawn_task("load model", move |progress| {
         progress(format!("opening {}", path.display()));
@@ -387,7 +431,9 @@ async fn api_data_upload(State(st): St, mut mp: Multipart) -> ApiResult<Json<Val
     let mut errors = vec![];
     let mut added = 0;
     while let Some(field) = mp.next_field().await? {
-        let Some(name) = field.file_name().map(|s| s.to_string()) else { continue };
+        let Some(name) = field.file_name().map(|s| s.to_string()) else {
+            continue;
+        };
         let bytes = field.bytes().await?;
         let id = {
             let mut inner = st.inner.lock().unwrap();
@@ -395,7 +441,8 @@ async fn api_data_upload(State(st): St, mut mp: Multipart) -> ApiResult<Json<Val
             format!("d{}", inner.next_id)
         };
         let name2 = name.clone();
-        let res = tokio::task::spawn_blocking(move || Dataset::from_bytes(id, &name2, &bytes)).await?;
+        let res =
+            tokio::task::spawn_blocking(move || Dataset::from_bytes(id, &name2, &bytes)).await?;
         match res {
             Ok(d) => {
                 st.inner.lock().unwrap().datasets.push(d);
@@ -425,8 +472,14 @@ async fn api_data_text(State(st): St, Json(req): Json<TextReq>) -> ApiResult<Jso
         let mut inner = st.inner.lock().unwrap();
         inner.next_id += 1;
         let id = format!("d{}", inner.next_id);
-        let name = if req.name.trim().is_empty() { "pasted text".to_string() } else { req.name.clone() };
-        inner.datasets.push(Dataset::from_text(id, &name, &req.text));
+        let name = if req.name.trim().is_empty() {
+            "pasted text".to_string()
+        } else {
+            req.name.clone()
+        };
+        inner
+            .datasets
+            .push(Dataset::from_text(id, &name, &req.text));
     }
     Ok(Json(data_list(&st)))
 }
@@ -437,10 +490,18 @@ struct DataUpdate {
     mapping: Option<ColumnMapping>,
 }
 
-async fn api_data_update(State(st): St, Path(id): Path<String>, Json(req): Json<DataUpdate>) -> ApiResult<Json<Value>> {
+async fn api_data_update(
+    State(st): St,
+    Path(id): Path<String>,
+    Json(req): Json<DataUpdate>,
+) -> ApiResult<Json<Value>> {
     {
         let mut inner = st.inner.lock().unwrap();
-        let d = inner.datasets.iter_mut().find(|d| d.id == id).context("dataset not found")?;
+        let d = inner
+            .datasets
+            .iter_mut()
+            .find(|d| d.id == id)
+            .context("dataset not found")?;
         if let Some(e) = req.enabled {
             d.enabled = e;
         }
@@ -465,11 +526,20 @@ struct SampleQuery {
 }
 
 /// Show how the first example of a dataset is presented to the model.
-async fn api_data_sample(State(st): St, Path(id): Path<String>, Query(q): Query<SampleQuery>) -> ApiResult<Json<Value>> {
+async fn api_data_sample(
+    State(st): St,
+    Path(id): Path<String>,
+    Query(q): Query<SampleQuery>,
+) -> ApiResult<Json<Value>> {
     let (_, tok) = st.model()?;
     let ds = {
         let inner = st.inner.lock().unwrap();
-        inner.datasets.iter().find(|d| d.id == id).cloned().context("dataset not found")?
+        inner
+            .datasets
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
+            .context("dataset not found")?
     };
     let (texts, convs) = ds.examples();
     let fmt = ChatFormatter::new(TemplateKind::parse(&q.template)?, &tok);
@@ -480,13 +550,20 @@ async fn api_data_sample(State(st): St, Path(id): Path<String>, Query(q): Query<
         let r = fmt.render(&c, false)?;
         let (ids, mask) = crate::chat::tokenize_rendered(&tok, &fmt, &r, false);
         let trained = mask.iter().filter(|m| **m).count();
-        let parts: Vec<Value> = segments(&r.text, &r.train_spans).into_iter().map(|(t, train)| json!({"text": t, "train": train})).collect();
-        return Ok(Json(json!({"template": fmt.name(), "parts": parts, "tokens": ids.len(), "trained_tokens": trained})));
+        let parts: Vec<Value> = segments(&r.text, &r.train_spans)
+            .into_iter()
+            .map(|(t, train)| json!({"text": t, "train": train}))
+            .collect();
+        return Ok(Json(
+            json!({"template": fmt.name(), "parts": parts, "tokens": ids.len(), "trained_tokens": trained}),
+        ));
     }
     let text = texts.into_iter().next().unwrap_or_default();
     let ids = tok.encode(&text, true, false);
     let shown: String = text.chars().take(3000).collect();
-    Ok(Json(json!({"template": "none (plain text)", "parts": [{"text": shown, "train": true}], "tokens": ids.len(), "trained_tokens": ids.len()})))
+    Ok(Json(
+        json!({"template": "none (plain text)", "parts": [{"text": shown, "train": true}], "tokens": ids.len(), "trained_tokens": ids.len()}),
+    ))
 }
 
 fn segments(text: &str, spans: &[(usize, usize)]) -> Vec<(String, bool)> {
@@ -520,17 +597,34 @@ async fn api_train_start(State(st): St, Json(cfg): Json<TrainConfig>) -> ApiResu
         return Err(anyhow!("wait for the current task to finish").into());
     }
     let (model, tok) = st.model()?;
-    let datasets: Vec<Dataset> = st.inner.lock().unwrap().datasets.iter().filter(|d| d.enabled).cloned().collect();
+    let datasets: Vec<Dataset> = st
+        .inner
+        .lock()
+        .unwrap()
+        .datasets
+        .iter()
+        .filter(|d| d.enabled)
+        .cloned()
+        .collect();
     if datasets.is_empty() {
         return Err(anyhow!("add some training data first").into());
     }
     let out = if cfg.output_dir.trim().is_empty() {
-        st.outputs_dir.join(format!("run-{}", crate::util::timestamp_slug()))
+        st.outputs_dir
+            .join(format!("run-{}", crate::util::timestamp_slug()))
     } else {
         let p = PathBuf::from(cfg.output_dir.trim());
-        if p.is_absolute() { p } else { st.outputs_dir.join(sanitize_file_name(cfg.output_dir.trim())) }
+        if p.is_absolute() {
+            p
+        } else {
+            st.outputs_dir
+                .join(sanitize_file_name(cfg.output_dir.trim()))
+        }
     };
-    *st.train_status.lock().unwrap() = TrainStatus { state: "preparing".into(), ..Default::default() };
+    *st.train_status.lock().unwrap() = TrainStatus {
+        state: "preparing".into(),
+        ..Default::default()
+    };
     st.train_stop.store(false, Ordering::Relaxed);
     let job = TrainJob {
         model,
@@ -541,8 +635,12 @@ async fn api_train_start(State(st): St, Json(cfg): Json<TrainConfig>) -> ApiResu
         stop: st.train_stop.clone(),
         output_dir: out.clone(),
     };
-    std::thread::Builder::new().name("trainer".into()).spawn(move || train::run(job))?;
-    Ok(Json(json!({"ok": true, "output_dir": out.display().to_string()})))
+    std::thread::Builder::new()
+        .name("trainer".into())
+        .spawn(move || train::run(job))?;
+    Ok(Json(
+        json!({"ok": true, "output_dir": out.display().to_string()}),
+    ))
 }
 
 async fn api_train_stop(State(st): St) -> Json<Value> {
@@ -550,7 +648,7 @@ async fn api_train_stop(State(st): St) -> Json<Value> {
     let mut s = st.train_status.lock().unwrap();
     if s.state == "training" || s.state == "preparing" {
         s.state = "stopping".into();
-        s.log("stop requested — finishing the current step and saving…");
+        s.log("stop requested, finishing the current step");
     }
     Json(json!({"ok": true}))
 }
@@ -596,7 +694,7 @@ fn yes() -> bool {
 
 async fn api_generate(State(st): St, Json(req): Json<GenReq>) -> ApiResult<Response> {
     if st.training_active() {
-        return Err(anyhow!("the model is busy training — try the playground after training").into());
+        return Err(anyhow!("the model is busy training").into());
     }
     if st.generating.swap(true, Ordering::SeqCst) {
         return Err(anyhow!("a generation is already running").into());
@@ -617,7 +715,10 @@ async fn api_generate(State(st): St, Json(req): Json<GenReq>) -> ApiResult<Respo
         let res = (|| -> anyhow::Result<()> {
             let ids = if req.use_template {
                 let fmt = ChatFormatter::new(TemplateKind::parse(&req.template)?, &tok);
-                let mut conv = Conversation { system: Some(req.system.clone()).filter(|s| !s.trim().is_empty()), turns: vec![] };
+                let mut conv = Conversation {
+                    system: Some(req.system.clone()).filter(|s| !s.trim().is_empty()),
+                    turns: vec![],
+                };
                 for (u, a) in &req.history {
                     conv.turns.push((u.clone(), Some(a.clone())));
                 }
@@ -628,7 +729,9 @@ async fn api_generate(State(st): St, Json(req): Json<GenReq>) -> ApiResult<Respo
                 tok.encode(&req.prompt, true, true)
             };
             let model = model.read().map_err(|_| anyhow!("model lock poisoned"))?;
-            let stats = generate(&model, &tok, &ids, &req.params, &stop, |t| send(json!({"text": t})))?;
+            let stats = generate(&model, &tok, &ids, &req.params, &stop, |t| {
+                send(json!({"text": t}))
+            })?;
             send(json!({"done": true, "stats": stats}));
             Ok(())
         })();
@@ -658,14 +761,17 @@ struct PathReq {
 async fn api_adapter_save(State(st): St, Json(req): Json<PathReq>) -> ApiResult<Json<Value>> {
     let (model, tok) = st.model()?;
     let dir = if req.path.trim().is_empty() {
-        st.outputs_dir.join(format!("adapter-{}", crate::util::timestamp_slug()))
+        st.outputs_dir
+            .join(format!("adapter-{}", crate::util::timestamp_slug()))
     } else {
         PathBuf::from(req.path.trim())
     };
     let m = model.try_read().map_err(|_| anyhow!("the model is busy"))?;
     let mut files = export::save_peft_adapter(&m, &tok, &dir)?;
     files.push(export::save_gguf_adapter(&m, &dir.join("adapter.gguf"))?);
-    Ok(Json(json!({"dir": dir.display().to_string(), "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>()})))
+    Ok(Json(
+        json!({"dir": dir.display().to_string(), "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>()}),
+    ))
 }
 
 async fn api_adapter_load(State(st): St, Json(req): Json<PathReq>) -> ApiResult<Json<Value>> {
@@ -674,7 +780,9 @@ async fn api_adapter_load(State(st): St, Json(req): Json<PathReq>) -> ApiResult<
     }
     let (model, _) = st.model()?;
     let msg = {
-        let mut m = model.try_write().map_err(|_| anyhow!("the model is busy"))?;
+        let mut m = model
+            .try_write()
+            .map_err(|_| anyhow!("the model is busy"))?;
         export::load_adapter(&mut m, FsPath::new(req.path.trim()))?
     };
     refresh_model_info(&st);
@@ -686,7 +794,10 @@ async fn api_adapter_remove(State(st): St) -> ApiResult<Json<Value>> {
         return Err(anyhow!("training is running").into());
     }
     let (model, _) = st.model()?;
-    model.try_write().map_err(|_| anyhow!("the model is busy"))?.detach_lora();
+    model
+        .try_write()
+        .map_err(|_| anyhow!("the model is busy"))?
+        .detach_lora();
     refresh_model_info(&st);
     Ok(Json(json!({"ok": true})))
 }
@@ -707,30 +818,45 @@ async fn api_export(State(st): St, Json(req): Json<ExportReq>) -> ApiResult<Json
     }
     let (model, tok) = st.model()?;
     if model.read().map(|m| m.lora.is_none()).unwrap_or(true) {
-        return Err(anyhow!("no adapter to merge — train or load an adapter first").into());
+        return Err(anyhow!("no adapter to merge, train or load one first").into());
     }
     let quant = export::parse_export_quant(&req.quant)?;
-    let base = if req.name.trim().is_empty() { format!("merged-{}", crate::util::timestamp_slug()) } else { sanitize_file_name(req.name.trim()) };
+    let base = if req.name.trim().is_empty() {
+        format!("merged-{}", crate::util::timestamp_slug())
+    } else {
+        sanitize_file_name(req.name.trim())
+    };
     let out_dir = st.outputs_dir.clone();
     let kind = req.kind.clone();
     st.spawn_task("export", move |progress| {
         let m = model.read().map_err(|_| anyhow!("model lock poisoned"))?;
         let path = match kind.as_str() {
             "merged_gguf" => {
-                let name = if base.ends_with(".gguf") { base.clone() } else { format!("{base}.gguf") };
+                let name = if base.ends_with(".gguf") {
+                    base.clone()
+                } else {
+                    format!("{base}.gguf")
+                };
                 export::export_merged_gguf(&m, &tok, &out_dir.join(name), quant, progress)?
             }
-            "merged_safetensors" => export::export_merged_safetensors(&m, &out_dir.join(&base), progress)?,
+            "merged_safetensors" => {
+                export::export_merged_safetensors(&m, &out_dir.join(&base), progress)?
+            }
             other => bail!("unknown export kind '{other}'"),
         };
-        let rel = path.strip_prefix(&out_dir).map(|p| p.display().to_string()).unwrap_or_default();
+        let rel = path
+            .strip_prefix(&out_dir)
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         Ok(json!({"path": path.display().to_string(), "download": rel}))
     })?;
     Ok(Json(json!({"ok": true})))
 }
 
 fn list_files(root: &FsPath, dir: &FsPath, out: &mut Vec<Value>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
     entries.sort();
     for p in entries {
@@ -759,11 +885,17 @@ async fn api_download(State(st): St, Path(path): Path<String>) -> ApiResult<Resp
     }
     let file = tokio::fs::File::open(&full).await?;
     let len = file.metadata().await?.len();
-    let name = full.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "download".into());
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
     let stream = tokio_util::io::ReaderStream::with_capacity(file, 1 << 20);
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_LENGTH, len)
-        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", name.replace('"', "")))
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", name.replace('"', "")),
+        )
         .body(Body::from_stream(stream))?)
 }

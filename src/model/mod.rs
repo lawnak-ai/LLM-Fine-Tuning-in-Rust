@@ -1,4 +1,4 @@
-//! Llama-family decoder (Llama 2/3, Mistral, Qwen2/2.5, Qwen3, SmolLM, TinyLlama, ...).
+//! Llama-style decoder (Llama 2/3, Mistral, Qwen2/2.5, Qwen3, SmolLM, TinyLlama).
 
 pub mod linear;
 pub mod load;
@@ -64,7 +64,15 @@ pub enum Proj {
 }
 
 impl Proj {
-    pub const ALL: [Proj; 7] = [Proj::Q, Proj::K, Proj::V, Proj::O, Proj::Gate, Proj::Up, Proj::Down];
+    pub const ALL: [Proj; 7] = [
+        Proj::Q,
+        Proj::K,
+        Proj::V,
+        Proj::O,
+        Proj::Gate,
+        Proj::Up,
+        Proj::Down,
+    ];
 
     pub fn short(self) -> &'static str {
         match self {
@@ -135,7 +143,9 @@ impl Embedding {
             Embedding::Dense(w) => {
                 let mut dims = ids.dims().to_vec();
                 dims.push(w.dim(1)?);
-                w.index_select(&ids.flatten_all()?, 0)?.to_dtype(DType::F32)?.reshape(dims)
+                w.index_select(&ids.flatten_all()?, 0)?
+                    .to_dtype(DType::F32)?
+                    .reshape(dims)
             }
         }
     }
@@ -212,7 +222,9 @@ pub struct KvCache {
 
 impl KvCache {
     pub fn new(n: usize) -> Self {
-        Self { layers: vec![None; n] }
+        Self {
+            layers: vec![None; n],
+        }
     }
     pub fn len(&self) -> usize {
         self.layers
@@ -276,7 +288,12 @@ impl Model {
             let v: Vec<f32> = (0..o * i).map(|_| rng.normal() * s).collect();
             Tensor::from_vec(v, (o, i), device)
         };
-        let lin = |w: Tensor, l: usize, p: Proj| Linear::new(FrozenLinear::new(FrozenWeight::Dense(w), None), crate::util::mix_seed(&[l as u64, p as u64]));
+        let lin = |w: Tensor, l: usize, p: Proj| {
+            Linear::new(
+                FrozenLinear::new(FrozenWeight::Dense(w), None),
+                crate::util::mix_seed(&[l as u64, p as u64]),
+            )
+        };
         let (h, f, hd) = (cfg.hidden_size, cfg.intermediate_size, cfg.head_dim);
         let ones = |n: usize| Tensor::ones(n, DType::F32, device);
         let mut blocks = vec![];
@@ -298,7 +315,17 @@ impl Model {
         let emb = mat(cfg.vocab_size, h, 0.5)?;
         let head = FrozenLinear::new(FrozenWeight::Dense(emb.clone()), None);
         let norm = ones(h)?;
-        Ok(Self::new(cfg, Embedding::Dense(emb), blocks, norm, head, device.clone(), ModelSource::HfDir { path: PathBuf::new() }))
+        Ok(Self::new(
+            cfg,
+            Embedding::Dense(emb),
+            blocks,
+            norm,
+            head,
+            device.clone(),
+            ModelSource::HfDir {
+                path: PathBuf::new(),
+            },
+        ))
     }
 
     pub fn is_gguf(&self) -> bool {
@@ -308,7 +335,8 @@ impl Model {
     /// Number of base model parameters.
     pub fn num_params(&self) -> u64 {
         let c = &self.cfg;
-        let attn = c.hidden_size * (c.num_heads * c.head_dim) * 2 + c.hidden_size * (c.num_kv_heads * c.head_dim) * 2;
+        let attn = c.hidden_size * (c.num_heads * c.head_dim) * 2
+            + c.hidden_size * (c.num_kv_heads * c.head_dim) * 2;
         let mlp = 3 * c.hidden_size * c.intermediate_size;
         let per_layer = attn + mlp + 2 * c.hidden_size;
         let emb = c.vocab_size * c.hidden_size;
@@ -358,7 +386,15 @@ impl Model {
             for p in Proj::ALL {
                 let lin = blk.proj_mut(p);
                 lin.lora = if cfg.targets.contains(&p) {
-                    Some(Lora::new(lin.in_features(), lin.out_features(), cfg.rank, cfg.alpha, cfg.dropout, &device, &mut rng)?)
+                    Some(Lora::new(
+                        lin.in_features(),
+                        lin.out_features(),
+                        cfg.rank,
+                        cfg.alpha,
+                        cfg.dropout,
+                        &device,
+                        &mut rng,
+                    )?)
                 } else {
                     None
                 };
@@ -425,7 +461,11 @@ impl Model {
             let half = self.cfg.head_dim / 2;
             let mut inv = Vec::with_capacity(half);
             for i in 0..half {
-                let mut f = 1.0 / self.cfg.rope_theta.powf((2 * i) as f64 / self.cfg.head_dim as f64);
+                let mut f = 1.0
+                    / self
+                        .cfg
+                        .rope_theta
+                        .powf((2 * i) as f64 / self.cfg.head_dim as f64);
                 if let Some(ff) = &self.cfg.rope_freq_factors {
                     if let Some(x) = ff.get(i) {
                         f /= *x as f64;
@@ -489,12 +529,25 @@ impl Model {
         let c = &self.cfg;
         let blk = &self.blocks[li];
         let (b, t, _) = x.dims3()?;
-        let past = cache.as_ref().and_then(|c| c.as_ref()).map(|(k, _)| k.dim(2).unwrap_or(0)).unwrap_or(0);
+        let past = cache
+            .as_ref()
+            .and_then(|c| c.as_ref())
+            .map(|(k, _)| k.dim(2).unwrap_or(0))
+            .unwrap_or(0);
 
         let h = rms_norm(x, &blk.attn_norm, c.rms_eps)?;
-        let q = blk.q.forward(&h, ctx)?.reshape((b, t, c.num_heads, c.head_dim))?;
-        let k = blk.k.forward(&h, ctx)?.reshape((b, t, c.num_kv_heads, c.head_dim))?;
-        let v = blk.v.forward(&h, ctx)?.reshape((b, t, c.num_kv_heads, c.head_dim))?;
+        let q = blk
+            .q
+            .forward(&h, ctx)?
+            .reshape((b, t, c.num_heads, c.head_dim))?;
+        let k = blk
+            .k
+            .forward(&h, ctx)?
+            .reshape((b, t, c.num_kv_heads, c.head_dim))?;
+        let v = blk
+            .v
+            .forward(&h, ctx)?
+            .reshape((b, t, c.num_kv_heads, c.head_dim))?;
         let q = match &blk.q_norm {
             Some(w) => rms_norm(&q, w, c.rms_eps)?,
             None => q,
@@ -535,9 +588,16 @@ impl Model {
         };
         let scale = 1.0 / (c.head_dim as f64).sqrt();
         let att = q.matmul(&k.t()?)?.affine(scale, 0.0)?;
-        let att = if t > 1 { att.broadcast_add(&self.causal_mask(t, past)?)? } else { att };
+        let att = if t > 1 {
+            att.broadcast_add(&self.causal_mask(t, past)?)?
+        } else {
+            att
+        };
         let att = softmax_last(&att)?;
-        let out = att.matmul(&v)?.transpose(1, 2)?.reshape((b, t, c.num_heads * c.head_dim))?;
+        let out = att
+            .matmul(&v)?
+            .transpose(1, 2)?
+            .reshape((b, t, c.num_heads * c.head_dim))?;
         let x = x.add(&blk.o.forward(&out, ctx)?)?;
 
         let h = rms_norm(&x, &blk.ffn_norm, c.rms_eps)?;
