@@ -74,3 +74,44 @@ fn llama_cpp_reference_tokenizations() {
     }
     assert!(hard_fail.is_empty(), "tokenizer mismatches for: {hard_fail:?}");
 }
+
+/// Renders every chat template shipped in llama.cpp's `models/templates`.
+#[test]
+fn llama_cpp_chat_templates() {
+    use llm_finetune::chat::{tokenize_rendered, ChatFormatter, Conversation, TemplateKind};
+    let Ok(dir) = std::env::var("LLAMA_VOCAB_DIR") else {
+        eprintln!("LLAMA_VOCAB_DIR not set; skipping");
+        return;
+    };
+    let dir = Path::new(&dir);
+    let mut f = std::fs::File::open(dir.join("ggml-vocab-qwen2.gguf")).unwrap();
+    let content = gguf_file::Content::read(&mut f).unwrap();
+    let mut tok = Tokenizer::from_gguf(&content.metadata).unwrap();
+    let conv = Conversation {
+        system: Some("You are helpful.".into()),
+        turns: vec![("Hi there".into(), Some("Hello! How can I help?".into())), ("What is 2+2?".into(), Some("4.".into()))],
+    };
+    let mut paths: Vec<_> = std::fs::read_dir(dir.join("templates")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    paths.retain(|p| p.extension().map(|e| e == "jinja").unwrap_or(false));
+    paths.sort();
+    let mut ok = 0;
+    for p in &paths {
+        tok.chat_template = Some(std::fs::read_to_string(p).unwrap());
+        let fmt = ChatFormatter::new(TemplateKind::Model, &tok);
+        let name = p.file_stem().unwrap().to_string_lossy().to_string();
+        if fmt.kind() != TemplateKind::Model {
+            println!("fallback {name}: {}", fmt.jinja_error.clone().unwrap_or_default());
+            continue;
+        }
+        let r = fmt.render(&conv, false).unwrap();
+        assert_eq!(r.train_spans.len(), 2, "{name}");
+        for (&(s, e), answer) in r.train_spans.iter().zip(["Hello! How can I help?", "4."]) {
+            assert!(r.text[s..e].starts_with(answer), "{name}: span {:?}", &r.text[s..e]);
+        }
+        let (_, mask) = tokenize_rendered(&tok, &fmt, &r, false);
+        assert!(mask.iter().any(|m| *m), "{name}: nothing trained");
+        ok += 1;
+    }
+    println!("{ok}/{} templates render with the model's own Jinja", paths.len());
+    assert!(ok * 10 >= paths.len() * 9, "too many templates fail: {ok}/{}", paths.len());
+}

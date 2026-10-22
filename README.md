@@ -174,6 +174,7 @@ cargo test --release
 - `tests/training.rs`: CSV + text → training (the loss must drop) → saved PEFT and GGUF adapters → reload gives identical outputs.
 - `tests/llama_cpp_vocab.rs`: set `LLAMA_VOCAB_DIR=<llama.cpp>/models` to compare against llama.cpp's reference tokenizations.
   All 14 supported vocabularies match exactly (Llama 2 SPM, Llama 3, Qwen2, Qwen3.5, GPT-2, Phi-3, StarCoder, Refact, Falcon, MPT, Command-R, DeepSeek Coder/LLM, …).
+  The same test renders the 74 real chat templates in llama.cpp's `models/templates`: 70 work with the model's own Jinja and mark exactly the answers for training. The other 4 need tool or "thinking" fields and fall back to a built-in format.
 
 These were also checked against llama.cpp itself while developing (`examples/dump_logits.rs`):
 
