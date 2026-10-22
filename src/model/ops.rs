@@ -69,7 +69,7 @@ impl CustomOp2 for ManualGrad {
                 let r = (x.sqr()?.mean_keepdim(D::Minus1)? + *eps)?.sqrt()?.recip()?;
                 let gw = g.broadcast_mul(w)?;
                 let dot = gw.mul(&x)?.mean_keepdim(D::Minus1)?;
-                let r3 = r.powf(3.0)?;
+                let r3 = r.sqr()?.mul(&r)?;
                 gw.broadcast_mul(&r)?.sub(&x.broadcast_mul(&dot.mul(&r3)?)?)?
             }
             Backward::Softmax => {
