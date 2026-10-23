@@ -101,6 +101,29 @@ pub fn human_count(n: u64) -> String {
     }
 }
 
+/// Try to open `url` in the default browser. Errors are ignored.
+pub fn open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 /// Seconds since the unix epoch.
 pub fn unix_time() -> u64 {
     std::time::SystemTime::now()

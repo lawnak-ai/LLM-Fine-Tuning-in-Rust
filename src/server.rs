@@ -194,12 +194,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-pub async fn serve(state: Arc<AppState>, addr: SocketAddr) -> anyhow::Result<()> {
+pub async fn serve(
+    state: Arc<AppState>,
+    addr: SocketAddr,
+    open_browser: bool,
+) -> anyhow::Result<()> {
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("cannot listen on {addr}"))?;
-    eprintln!("\n  LLM Fine-Tuning Studio is running:  http://{addr}\n");
+    let url = format!("http://{addr}");
+    eprintln!("\n  LLM Fine-Tuning Studio is running:  {url}\n  Press Ctrl+C to stop.\n");
+    if open_browser {
+        crate::util::open_browser(&url);
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

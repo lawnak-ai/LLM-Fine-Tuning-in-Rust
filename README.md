@@ -13,7 +13,17 @@ What it can do:
 
 ![Training screen](docs/train.png)
 
-## Getting started
+## Download
+
+Ready-made builds for Windows, Linux and macOS (Apple Silicon) are on the
+[Releases](https://github.com/lawnak-ai/LLM-Fine-Tuning-in-Rust/releases) page.
+Unzip, run `llm-finetune.exe` (Windows) or `llm-finetune`, and the browser opens by itself.
+
+- Windows: if SmartScreen shows "Windows protected your PC", click "More info" and "Run anyway".
+- macOS: the first time, right-click the file and choose Open.
+- The Windows and Linux builds run on the CPU (AVX2 needed). For an NVIDIA GPU, build from source as below.
+
+## Building from source
 
 Install Rust from https://rustup.rs, then build:
 

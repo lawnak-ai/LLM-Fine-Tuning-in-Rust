@@ -58,6 +58,9 @@ struct ServeArgs {
     /// Folder scanned for models (default: <work-dir>/models).
     #[arg(long)]
     models_dir: Option<PathBuf>,
+    /// Don't open the browser on start.
+    #[arg(long)]
+    no_browser: bool,
 }
 
 impl Default for ServeArgs {
@@ -67,6 +70,7 @@ impl Default for ServeArgs {
             port: 7860,
             work_dir: "workspace".into(),
             models_dir: None,
+            no_browser: false,
         }
     }
 }
@@ -216,7 +220,20 @@ fn load(
     Ok((m, t))
 }
 
-fn main() -> Result<()> {
+fn main() {
+    // started by double-click: keep the window open so errors can be read
+    let no_args = std::env::args_os().len() == 1;
+    if let Err(e) = run() {
+        eprintln!("error: {e:#}");
+        if no_args {
+            eprintln!("\nPress Enter to close.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
     if let Some(n) = cli.threads {
         std::env::set_var("RAYON_NUM_THREADS", n.to_string());
@@ -230,7 +247,7 @@ fn main() -> Result<()> {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            rt.block_on(server::serve(state, addr))
+            rt.block_on(server::serve(state, addr, !a.no_browser))
         }
         Cmd::Info(a) => {
             let (m, t) = load(&a)?;

@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            # AVX2 CPUs (Intel 2013+, AMD 2015+); .cargo/config.toml would use the build machine's CPU
+            rustflags: "-C target-cpu=x86-64-v3"
+            features: ""
+          - os: ubuntu-22.04
+            name: linux-x64
+            rustflags: "-C target-cpu=x86-64-v3"
+            features: ""
+          - os: macos-14
+            name: macos-arm64
+            rustflags: "-C target-cpu=apple-m1"
+            features: "--features metal"
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --locked ${{ matrix.features }}
+      - name: Test
+        run: cargo test --release --locked ${{ matrix.features }}
+      - name: Package
+        shell: bash
+        run: |
+          dir="llm-finetune-$VERSION-${{ matrix.name }}"
+          mkdir -p "$dir"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/llm-finetune.exe "$dir/"
+          else
+            cp target/release/llm-finetune "$dir/"
+          fi
+          cp README.md LICENSE "$dir/"
+          cp -r examples/data "$dir/example-data"
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "dist/$dir.zip" "$dir" > /dev/null
+          else
+            tar czf "dist/$dir.tar.gz" "$dir"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ github.event.inputs.version || github.ref_name }}
+          files: dist/*
+          body: |
+            Download the file for your system, unzip it and run `llm-finetune` (`llm-finetune.exe` on Windows).
+            The browser opens at http://127.0.0.1:7860. Models and outputs are kept in a `workspace` folder next to where you start it.
+
+            - **Windows**: if SmartScreen says "Windows protected your PC", click "More info" then "Run anyway".
+            - **macOS** (Apple Silicon, uses the GPU through Metal): the first time, right-click the file and choose Open, or run `xattr -d com.apple.quarantine llm-finetune`.
+            - **Linux**: `chmod +x llm-finetune` if needed.
+
+            These builds use the CPU on Windows and Linux (needs a CPU with AVX2). For NVIDIA GPUs build from source with `cargo build --release --features cuda`.
