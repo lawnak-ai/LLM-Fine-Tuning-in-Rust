@@ -36,7 +36,9 @@ impl DeviceChoice {
                 if !cfg!(feature = "cuda") {
                     bail!("this binary was built without CUDA support; rebuild with `cargo build --release --features cuda`")
                 }
-                Ok(Device::new_cuda(i)?)
+                let d = Device::new_cuda(i)?;
+                check_cuda(&d)?;
+                Ok(d)
             }
             Self::Metal(i) => {
                 if !cfg!(feature = "metal") {
@@ -45,9 +47,12 @@ impl DeviceChoice {
                 Ok(Device::new_metal(i)?)
             }
             Self::Auto => {
-                if cfg!(feature = "cuda") && candle_core::utils::cuda_is_available() {
+                if cuda_available() {
                     if let Ok(d) = Device::new_cuda(0) {
-                        return Ok(d);
+                        match check_cuda(&d) {
+                            Ok(()) => return Ok(d),
+                            Err(e) => eprintln!("{e}, using the CPU"),
+                        }
                     }
                 }
                 if cfg!(feature = "metal") && candle_core::utils::metal_is_available() {
@@ -59,6 +64,58 @@ impl DeviceChoice {
             }
         }
     }
+}
+
+/// Checks the GPU against the architecture the kernels were compiled for
+/// (`CUDA_COMPUTE_CAP` at build time, e.g. 80 for the release build).
+#[cfg(feature = "cuda")]
+fn check_cuda(d: &Device) -> Result<()> {
+    let Device::Cuda(cd) = d else { return Ok(()) };
+    let Some(built) = option_env!("CUDA_COMPUTE_CAP")
+        .and_then(|s| {
+            s.trim_end_matches(|c: char| c.is_ascii_alphabetic())
+                .parse::<i32>()
+                .ok()
+        })
+        .map(|n| (n / 10, n % 10))
+    else {
+        // built for the local GPU
+        return Ok(());
+    };
+    let cc = cd.cuda_stream().context().compute_capability()?;
+    if cc < built {
+        bail!(
+            "this build needs an NVIDIA GPU with compute capability {}.{} or newer, this one has {}.{}",
+            built.0,
+            built.1,
+            cc.0,
+            cc.1
+        );
+    }
+    // candle's fast GGUF matmul kernels only exist for the build architecture,
+    // other GPUs use the dequantize + cuBLAS path
+    if cc.0 != built.0 {
+        candle_core::quantized::cuda::set_force_dmmv(true);
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn check_cuda(_: &Device) -> Result<()> {
+    Ok(())
+}
+
+/// True when the NVIDIA driver loads and sees a GPU (candle's helper only
+/// says whether CUDA was compiled in).
+#[cfg(feature = "cuda")]
+fn cuda_available() -> bool {
+    use candle_core::cuda_backend::cudarc::driver::CudaContext;
+    CudaContext::device_count().is_ok_and(|n| n > 0)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cuda_available() -> bool {
+    false
 }
 
 pub fn device_label(d: &Device) -> String {
@@ -94,7 +151,7 @@ pub fn system_info() -> SystemInfo {
         mkl: candle_core::utils::has_mkl(),
         accelerate: candle_core::utils::has_accelerate(),
         cuda_compiled: cfg!(feature = "cuda"),
-        cuda_available: cfg!(feature = "cuda") && candle_core::utils::cuda_is_available(),
+        cuda_available: cuda_available(),
         metal_compiled: cfg!(feature = "metal"),
         metal_available: cfg!(feature = "metal") && candle_core::utils::metal_is_available(),
     }

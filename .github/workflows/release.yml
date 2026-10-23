@@ -23,6 +23,11 @@ jobs:
             # AVX2 CPUs (Intel 2013+, AMD 2015+); .cargo/config.toml would use the build machine's CPU
             rustflags: "-C target-cpu=x86-64-v3"
             features: ""
+          - os: windows-2022
+            name: windows-x64-cuda
+            rustflags: "-C target-cpu=x86-64-v3"
+            features: "--features cuda"
+            cuda: "12.8.1"
           - os: ubuntu-22.04
             name: linux-x64
             rustflags: "-C target-cpu=x86-64-v3"
@@ -38,9 +43,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install CUDA
+        if: matrix.cuda
+        shell: pwsh
+        run: |
+          $v = "${{ matrix.cuda }}"
+          $mm = $v.Substring(0, $v.LastIndexOf("."))
+          Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/$v/network_installers/cuda_${v}_windows_network.exe" -OutFile cuda-setup.exe
+          $pkgs = "nvcc cudart thrust cublas cublas_dev curand curand_dev nvrtc nvrtc_dev".Split(" ") | ForEach-Object { "$($_)_$mm" }
+          Start-Process -Wait -FilePath .\cuda-setup.exe -ArgumentList (@("-s") + $pkgs)
+          $root = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$mm"
+          & "$root\bin\nvcc.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "CUDA_PATH=$root" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+          # PTX for 8.0 runs on RTX 30 series and newer; bf16 kernels need 8.0
+          "CUDA_COMPUTE_CAP=80" >> $env:GITHUB_ENV
+          # nvcc needs cl.exe and the MSVC include/lib paths
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match "^(PATH|INCLUDE|LIB|LIBPATH)=(.*)$") { "$($matches[1])=$($matches[2])" >> $env:GITHUB_ENV }
+          }
       - name: Build
         run: cargo build --release --locked ${{ matrix.features }}
       - name: Test
+        # the CUDA build needs nvcuda.dll from the NVIDIA driver, which the runner doesn't have
+        if: ${{ !matrix.cuda }}
         run: cargo test --release --locked ${{ matrix.features }}
       - name: Package
         shell: bash
@@ -51,6 +79,21 @@ jobs:
             cp target/release/llm-finetune.exe "$dir/"
           else
             cp target/release/llm-finetune "$dir/"
+          fi
+          if [ -n "${{ matrix.cuda }}" ]; then
+            cuda="$(cygpath -u "$CUDA_PATH")/bin"
+            for p in cudart64 cublas64 cublasLt64 curand64; do
+              cp "$cuda"/${p}_*.dll "$dir/"
+            done
+            # every CUDA dll the exe imports must be in the folder (nvcuda.dll comes with the driver)
+            dumpbin -nologo -dependents "$dir/llm-finetune.exe" | tr -d '\r' | grep -io '[a-z0-9_.-]*\.dll$' | sort -u | while read -r d; do
+              echo "imports $d"
+              if [ "$d" != "nvcuda.dll" ] && [ -e "$cuda/$d" ] && [ ! -e "$dir/$d" ]; then
+                echo "missing $d"
+                exit 1
+              fi
+            done
+            ls -l "$dir"
           fi
           cp README.md LICENSE "$dir/"
           cp -r examples/data "$dir/example-data"
@@ -83,8 +126,10 @@ jobs:
             Download the file for your system, unzip it and run `llm-finetune` (`llm-finetune.exe` on Windows).
             The browser opens at http://127.0.0.1:7860. Models and outputs are kept in a `workspace` folder next to where you start it.
 
-            - **Windows**: if SmartScreen says "Windows protected your PC", click "More info" then "Run anyway".
+            - **Windows with an NVIDIA GPU**: `windows-x64-cuda`. Needs an RTX 30 series card or newer (compute capability 8.0+) and NVIDIA driver 570 or newer. The CUDA libraries are in the zip, the CUDA toolkit is not needed.
+            - **Windows without NVIDIA**: `windows-x64`, runs on the CPU.
             - **macOS** (Apple Silicon, uses the GPU through Metal): the first time, right-click the file and choose Open, or run `xattr -d com.apple.quarantine llm-finetune`.
-            - **Linux**: `chmod +x llm-finetune` if needed.
+            - **Linux**: `linux-x64`, runs on the CPU. `chmod +x llm-finetune` if needed.
 
-            These builds use the CPU on Windows and Linux (needs a CPU with AVX2). For NVIDIA GPUs build from source with `cargo build --release --features cuda`.
+            If SmartScreen says "Windows protected your PC", click "More info" then "Run anyway".
+            The CPU builds need a CPU with AVX2. For NVIDIA on Linux, or older NVIDIA cards, build from source with `cargo build --release --features cuda`.

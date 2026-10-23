@@ -19,9 +19,10 @@ Ready-made builds for Windows, Linux and macOS (Apple Silicon) are on the
 [Releases](https://github.com/lawnak-ai/LLM-Fine-Tuning-in-Rust/releases) page.
 Unzip, run `llm-finetune.exe` (Windows) or `llm-finetune`, and the browser opens by itself.
 
+- Windows with an NVIDIA GPU: take `windows-x64-cuda`. It needs an RTX 30 series card or newer and NVIDIA driver 570 or newer. The CUDA libraries are in the zip, so the CUDA toolkit isn't needed.
 - Windows: if SmartScreen shows "Windows protected your PC", click "More info" and "Run anyway".
 - macOS: the first time, right-click the file and choose Open.
-- The Windows and Linux builds run on the CPU (AVX2 needed). For an NVIDIA GPU, build from source as below.
+- The other Windows build and the Linux build run on the CPU (AVX2 needed). For NVIDIA on Linux or an older card, build from source as below.
 
 ## Building from source
 

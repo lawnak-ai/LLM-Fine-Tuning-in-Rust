@@ -1,6 +1,6 @@
 [package]
 name = "llm-finetune"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
 description = "LoRA fine-tuning for LLMs with a web UI (GGUF and safetensors models, CPU or GPU)"
