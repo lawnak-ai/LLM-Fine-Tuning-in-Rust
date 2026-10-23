@@ -20,12 +20,14 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x64
-            # AVX2 CPUs (Intel 2013+, AMD 2015+); .cargo/config.toml would use the build machine's CPU
-            rustflags: "-C target-cpu=x86-64-v3"
+            # AVX2 CPUs (Intel 2013+, AMD 2015+); .cargo/config.toml would use the build machine's CPU.
+            # Static C runtime so the exe doesn't need the VC++ redistributable.
+            rustflags: "-C target-cpu=x86-64-v3 -C target-feature=+crt-static"
             features: ""
           - os: windows-2022
             name: windows-x64-cuda
-            rustflags: "-C target-cpu=x86-64-v3"
+            # nvcc builds candle's kernels with the static C runtime too
+            rustflags: "-C target-cpu=x86-64-v3 -C target-feature=+crt-static"
             features: "--features cuda"
             cuda: "12.8.1"
           - os: ubuntu-22.04
@@ -77,23 +79,31 @@ jobs:
           mkdir -p "$dir"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp target/release/llm-finetune.exe "$dir/"
-          else
-            cp target/release/llm-finetune "$dir/"
-          fi
-          if [ -n "${{ matrix.cuda }}" ]; then
-            cuda="$(cygpath -u "$CUDA_PATH")/bin"
-            for p in cudart64 cublas64 cublasLt64 curand64; do
-              cp "$cuda"/${p}_*.dll "$dir/"
-            done
-            # every CUDA dll the exe imports must be in the folder (nvcuda.dll comes with the driver)
-            dumpbin -nologo -dependents "$dir/llm-finetune.exe" | tr -d '\r' | grep -io '[a-z0-9_.-]*\.dll$' | sort -u | while read -r d; do
-              echo "imports $d"
-              if [ "$d" != "nvcuda.dll" ] && [ -e "$cuda/$d" ] && [ ! -e "$dir/$d" ]; then
-                echo "missing $d"
-                exit 1
+            if [ -n "${{ matrix.cuda }}" ]; then
+              cuda="$(cygpath -u "$CUDA_PATH")/bin"
+              for p in cudart64 cublas64 cublasLt64 curand64; do
+                cp "$cuda"/${p}_*.dll "$dir/"
+              done
+            fi
+            # everything has to load on a clean Windows: no VC++ runtime, and the only dll
+            # that is neither in the folder nor in System32 is nvcuda.dll from the NVIDIA driver
+            vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            dumpbin="$(cygpath -u "$("$vswhere" -latest -products '*' -find 'VC\Tools\MSVC\**\Hostx64\x64\dumpbin.exe' | head -n 1 | tr -d '\r')")"
+            for f in "$dir"/*.exe "$dir"/*.dll; do
+              if [ -e "$f" ]; then
+                "$dumpbin" -nologo -dependents "$f" | tr -d '\r' | grep -io '[a-z0-9_.-]*\.dll$'
               fi
+            done | tr 'A-Z' 'a-z' | sort -u | while read -r d; do
+              echo "imports $d"
+              case "$d" in
+                vcruntime*|msvcp*) echo "needs the VC++ runtime"; exit 1 ;;
+                nvcuda.dll|api-ms-win-*|ext-ms-*) ;;
+                *) if [ ! -e "$dir/$d" ] && [ ! -e "/c/Windows/System32/$d" ]; then echo "missing $d"; exit 1; fi ;;
+              esac
             done
             ls -l "$dir"
+          else
+            cp target/release/llm-finetune "$dir/"
           fi
           cp README.md LICENSE "$dir/"
           cp -r examples/data "$dir/example-data"
